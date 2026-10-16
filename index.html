@@ -142,6 +142,7 @@
         <button type="button" id="mode-unit" data-mode="unit" aria-pressed="false">단위</button>
         <button type="button" id="mode-lab" data-mode="lab" aria-pressed="false">연구</button>
         <button type="button" id="mode-acct" data-mode="acct" aria-pressed="false">회계</button>
+        <button type="button" id="mode-estate" data-mode="estate" aria-pressed="false">부동산</button>
       </div>
       <div style="display:flex; gap:6px;">
         <button type="button" class="pill" id="deg" hidden>Deg</button>
@@ -397,7 +398,7 @@ function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', '�
   function render() {
     const conv = isConvMode();
     $('screen').hidden = conv; $('mainKeys').hidden = conv; $('conv').hidden = !conv; $('histPanel').hidden = conv;
-    $('shell').style.gridTemplateColumns = conv ? ((state.mode === 'lab' || state.mode === 'acct') ? 'minmax(0, 520px)' : 'minmax(0, 400px)') : '';
+    $('shell').style.gridTemplateColumns = conv ? ((state.mode === 'lab' || state.mode === 'acct' || state.mode === 'estate') ? 'minmax(0, 520px)' : 'minmax(0, 400px)') : '';
     if (conv) { ['sciKeys', 'hexKeys', 'progOps', 'baseSel'].forEach((i) => ($(i).hidden = true)); return; }
     $('prev').textContent = state.prev;
     const ex = $('expr');
@@ -554,7 +555,7 @@ function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', '�
     state.mode = m; state.expr = ''; state.prev = ''; state.err = ''; state.fresh = false; state.rep = null;
     document.querySelectorAll('.modes [data-mode]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
     $('deg').hidden = m !== 'sci';
-    if (m === 'fx' || m === 'unit') buildConv(); else if (m === 'lab' || m === 'acct') buildLab();
+    if (m === 'fx' || m === 'unit') buildConv(); else if (m === 'lab' || m === 'acct' || m === 'estate') buildLab();
     render();
   }
 
@@ -723,7 +724,7 @@ function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', '�
   }
 
   // ---- 연구 탭 (의생명공학 실험·통계 도구)
-  const isConvMode = () => state.mode === 'fx' || state.mode === 'unit' || state.mode === 'lab' || state.mode === 'acct';
+  const isConvMode = () => state.mode === 'fx' || state.mode === 'unit' || state.mode === 'lab' || state.mode === 'acct' || state.mode === 'estate';
   // LAB START
   const NA = 6.02214076e23;
   const LU = {
@@ -3184,14 +3185,219 @@ function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', '�
     AGROUPS.splice(i + 1, 0, ['외화환산 (K-IFRS 1021)', ['fxm', 'fxn', 'fxs', 'fxh']], ['연결회계 (K-IFRS 1110 · 1103)', ['cons', 'intg', 'step', 'ncieq', 'ctrl']]);
   })();
   // ACCT3 END
+  // ESTATE START
+  const PYEONG = 400 / 121;
+  const bracketTax = (base, tb) => { let prev = 0, tax = 0, mr = 0; for (const [lim, r] of tb) { if (base <= prev) break; tax += (Math.min(base, lim) - prev) * (r / 100); mr = r; prev = lim; } return { tax, mr }; };
+  const INC_TB = [[14e6, 6], [50e6, 15], [88e6, 24], [150e6, 35], [300e6, 38], [500e6, 40], [1000e6, 42], [Infinity, 45]];
+  const ETOOLS = [
+    {
+      id: 'fee', name: '중개보수 (상한 요율 · 부가세)',
+      note: '국토교통부 중개보수 요율표(주택 매매·교환은 5천만 원 미만 0.6%(한도 25만), 5천만~2억 0.5%(한도 80만), 2억~9억 0.4%, 9억~12억 0.5%, 12억~15억 0.6%, 15억 이상 0.7%)를 기준으로 한 상한입니다. 실제 상한 요율은 각 지방자치단체 조례가 정하므로 지역 조례와 대조하세요. 월세가 있으면 환산금액 = 보증금 + 월세 × 100이며, 이 값이 5천만 원 미만이면 월세 × 70으로 계산합니다. 오피스텔(주거용, 전용 85㎡ 이하, 부엌·화장실 구비)은 매매 0.5%, 임대차 0.4%, 그 밖의 건물·토지는 0.9% 이내에서 협의합니다. 실제 보수는 요율 이내에서 협의한 금액입니다.',
+      fields: [
+        { k: 'deal', l: '거래 종류', t: 'sel', d: 'sale', opts: [['sale', '매매·교환'], ['lease', '전세·월세 (임대차)']] },
+        { k: 'kind', l: '대상', t: 'sel', d: 'house', opts: [['house', '주택'], ['offi', '오피스텔 (주거용 85㎡ 이하)'], ['other', '상가·토지·기타']] },
+        { k: 'price', l: '거래금액 (매매가 또는 보증금)', d: '500000000' }, { k: 'rent', l: '월세 (임대차)', d: '0', opt: true },
+        { k: 'vat', l: '부가세율 (%, 일반과세 중개사)', d: '10', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['price']);
+        const lease = v.deal === 'lease', rent = lease ? optN(v.rent, 0) : 0;
+        let amt = v.price;
+        if (lease && rent > 0) { amt = v.price + rent * 100; if (amt < 5e7) amt = v.price + rent * 70; }
+        let rate, cap = null, label;
+        if (v.kind === 'house') {
+          const S = [[5e7, 0.6, 250000], [2e8, 0.5, 800000], [9e8, 0.4, null], [12e8, 0.5, null], [15e8, 0.6, null], [Infinity, 0.7, null]];
+          const L = [[5e7, 0.5, 200000], [1e8, 0.4, 300000], [6e8, 0.3, null], [12e8, 0.4, null], [15e8, 0.5, null], [Infinity, 0.6, null]];
+          const row = (lease ? L : S).find((x) => amt < x[0]);
+          rate = row[1]; cap = row[2]; label = '주택 ' + (lease ? '임대차' : '매매');
+          if (!lease && amt >= 15e8) label += ' (15억 이상은 0.7% 이내 협의)';
+        } else if (v.kind === 'offi') { rate = lease ? 0.4 : 0.5; label = '오피스텔 ' + (lease ? '임대차' : '매매'); }
+        else { rate = 0.9; label = '상가·토지 등 (0.9% 이내 협의)'; }
+        let fee = (amt * rate) / 100, capped = false;
+        if (cap !== null && fee > cap) { fee = cap; capped = true; }
+        const vat = (fee * optN(v.vat, 0)) / 100;
+        const rows = [['적용 대상·요율', label + ' · ' + rate + ' %'], ['요율 적용 금액', money(amt, 0)]];
+        if (cap !== null) rows.push(['한도액', money(cap, 0) + (capped ? ' (한도 적용됨)' : '')]);
+        rows.push(['중개보수 상한', money(fee, 0), true], ['부가세', money(vat, 0)], ['합계 (매도·매수 각자 부담)', money(fee + vat, 0), true]);
+        return { rows, notes: ['중개보수는 거래 당사자 쌍방이 각각 중개업자에게 지급하는 금액의 상한입니다. 상한 초과 약정은 무효이고 초과분은 반환 대상입니다.'] };
+      },
+    },
+    {
+      id: 'cvt', name: '전월세 전환율 (월세 ↔ 보증금)',
+      note: '전환율 = 월세 × 12 ÷ (전세보증금 − 월세 계약의 보증금). 세 값(전세보증금, 월세, 전환율) 중 모르는 하나만 비워 두세요. 주택임대차보호법상 월차임 전환 이율의 상한은 기준금리 + 2%(시행령 기준)이며, 기준금리를 넣으면 상한과 비교합니다(현재 법정 가산율은 개정될 수 있으니 확인하세요).',
+      fields: [
+        { k: 'jeon', l: '전세보증금', d: '300000000', opt: true }, { k: 'dep', l: '월세 계약의 보증금', d: '50000000' },
+        { k: 'rent', l: '월세 (월)', d: '', opt: true }, { k: 'rate', l: '전환율 (연 %)', d: '5', opt: true },
+        { k: 'base', l: '한국은행 기준금리 (%, 선택)', d: '', opt: true },
+      ],
+      compute(v) {
+        const bl = ['jeon', 'rent', 'rate'].filter((k) => v[k] === null);
+        if (bl.length !== 1) throw new Error('전세보증금·월세·전환율 중 모르는 하나만 비워 두세요');
+        let { jeon, rent, rate } = v;
+        const b = bl[0];
+        if (b === 'rate') { if (jeon <= v.dep) throw new Error('전세보증금이 월세 보증금보다 커야 합니다'); rate = ((rent * 12) / (jeon - v.dep)) * 100; }
+        else if (b === 'rent') { if (!(rate > 0)) throw new Error('전환율을 입력하세요'); rent = ((jeon - v.dep) * rate) / 100 / 12; }
+        else { if (!(rate > 0)) throw new Error('전환율을 입력하세요'); jeon = v.dep + (rent * 12) / (rate / 100); }
+        const rows = [[b === 'rate' ? '전환율 (연)' : b === 'rent' ? '월세 (월)' : '환산 전세보증금', b === 'rate' ? rate.toFixed(3) + ' %' : money(b === 'rent' ? rent : jeon, 0), true], ['보증금 차액 (전세 − 월세 보증금)', money(jeon - v.dep, 0)], ['연 월세 합계', money(rent * 12, 0)]];
+        if (v.base !== null) { const lim = v.base + 2; rows.push(['법정 상한 전환율 (기준금리 + 2%)', lim.toFixed(2) + ' %'], ['판단', rate <= lim + 1e-9 ? '법정 상한 이내' : '법정 상한 초과']); }
+        return { rows };
+      },
+    },
+    {
+      id: 'loanmax', name: '대출 한도 (LTV · DSR)',
+      note: 'LTV 한도 = 주택가격 × LTV − 선순위 채권 − 최우선변제 소액임차보증금(방공제), DSR 한도 = (연소득 × DSR비율 − 기존 대출 연 원리금) ÷ 12를 월 상환액으로 하는 원리금균등 대출 원금입니다. LTV·DSR 비율과 가산 스트레스 금리는 지역·차주·시기에 따라 규제가 바뀌므로 직접 입력하세요. 실제 한도는 금융기관 심사 결과를 따릅니다.',
+      fields: [
+        { k: 'price', l: '주택가격 (시세·감정가)', d: '800000000' }, { k: 'ltv', l: 'LTV (%)', d: '70' },
+        { k: 'sen', l: '기존 선순위 담보대출', d: '0', opt: true }, { k: 'ten', l: '방공제 (소액임차보증금)', d: '0', opt: true },
+        { k: 'inc', l: '연소득', d: '80000000' }, { k: 'dsr', l: 'DSR 비율 (%)', d: '40' }, { k: 'od', l: '기존 대출 연 원리금 상환액', d: '0', opt: true },
+        { k: 'r', l: '대출금리 (연 %)', d: '4.5' }, { k: 'st', l: '스트레스 가산금리 (%p)', d: '0', opt: true }, { k: 'y', l: '대출기간 (년)', d: '30' },
+      ],
+      compute(v) {
+        positive(v, ['price', 'ltv', 'inc', 'dsr', 'y']);
+        const byLtv = Math.max(0, (v.price * v.ltv) / 100 - optN(v.sen, 0) - optN(v.ten, 0));
+        const pay = Math.max(0, (v.inc * v.dsr) / 100 - optN(v.od, 0)) / 12, i = (v.r + optN(v.st, 0)) / 1200, n = Math.round(v.y * 12);
+        const byDsr = i === 0 ? pay * n : (pay * (1 - (1 + i) ** -n)) / i;
+        const lim = Math.min(byLtv, byDsr), ir = v.r / 1200;
+        const mp = lim * (ir === 0 ? 1 / n : ir / (1 - (1 + ir) ** -n));
+        return { rows: [['LTV 기준 한도', money(byLtv, 0)], ['DSR 기준 한도', money(byDsr, 0)], ['최대 대출 가능액', money(lim, 0), true], ['제약 요인', byLtv <= byDsr ? 'LTV' : 'DSR'], ['월 상환액 (실제 금리 기준)', money(mp, 0), true], ['월 상환 / 월소득', pct(mp / (v.inc / 12))], ['필요한 자기자금 (가격 − 대출)', money(Math.max(0, v.price - lim), 0)]] };
+      },
+    },
+    {
+      id: 'acq', name: '취득세 (농어촌특별세 · 지방교육세)',
+      note: '유상취득 주택(1주택 기준) 취득세율은 6억 원 이하 1%, 6억~9억 (취득가액 ÷ 1억 × 2/3 − 3)%, 9억 초과 3%이고 지방교육세는 취득세의 10%, 농어촌특별세는 전용 85㎡ 초과 주택에 0.2%입니다. 비주택 유상취득은 취득세 4%·농특세 0.2%·지방교육세 0.4%, 상속(일반) 2.8%·0.2%·0.16%, 증여 3.5%·0.2%·0.3%입니다. 조정대상지역 다주택 중과와 생애최초·감면은 법 개정이 잦아 반영하지 않았으니 "직접 입력"으로 세율을 넣으세요.',
+      fields: [
+        { k: 'price', l: '취득가액 (과세표준)', d: '800000000' },
+        { k: 'kind', l: '취득 종류', t: 'sel', d: 'h1', opts: [['h1', '주택 유상취득 (1주택 기준)'], ['non', '비주택 유상취득 (상가·토지·오피스텔 등 4%)'], ['inh', '상속 (일반 2.8%)'], ['gift', '증여 (3.5%)'], ['cus', '직접 입력 (중과 등)']] },
+        { k: 'big', l: '전용 85㎡ 초과', t: 'sel', d: 'n', opts: [['n', '85㎡ 이하 (주택 농특세 면제)'], ['y', '85㎡ 초과']] },
+        { k: 'ct', l: '[직접입력] 취득세율 (%)', d: '', opt: true }, { k: 'cf', l: '[직접입력] 농어촌특별세율 (%)', d: '', opt: true }, { k: 'cl', l: '[직접입력] 지방교육세율 (%)', d: '', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['price']);
+        let tr, fr, lr;
+        if (v.kind === 'h1') { tr = v.price <= 6e8 ? 1 : v.price <= 9e8 ? (v.price / 1e8) * (2 / 3) - 3 : 3; lr = tr * 0.1; fr = v.big === 'y' ? 0.2 : 0; }
+        else if (v.kind === 'non') { tr = 4; fr = 0.2; lr = 0.4; }
+        else if (v.kind === 'inh') { tr = 2.8; fr = 0.2; lr = 0.16; }
+        else if (v.kind === 'gift') { tr = 3.5; fr = 0.2; lr = 0.3; }
+        else { if (v.ct === null) throw new Error('취득세율을 입력하세요'); tr = v.ct; fr = optN(v.cf, 0); lr = optN(v.cl, 0); }
+        const a = (v.price * tr) / 100, b = (v.price * fr) / 100, c = (v.price * lr) / 100;
+        return { rows: [['취득세율', tr.toFixed(3) + ' %'], ['취득세', money(a, 0)], ['농어촌특별세 (' + fr.toFixed(2) + '%)', money(b, 0)], ['지방교육세 (' + lr.toFixed(3) + '%)', money(c, 0)], ['합계', money(a + b + c, 0), true], ['실효세율', pct((a + b + c) / v.price, 3)]] };
+      },
+    },
+    {
+      id: 'cgt', name: '양도소득세 (주택 · 장기보유특별공제)',
+      note: '양도차익 = 양도가 − 취득가 − 필요경비. 일반 장기보유특별공제는 보유 3년 이상부터 연 2%씩(15년 이상 30% 한도). 1세대1주택(2년 이상 보유 가정)은 양도가가 12억 이하이면 비과세, 초과분은 과세(양도차익 × (양도가 − 12억)/양도가)하며 장기보유특별공제는 보유 연 4%(최대 40%) + 거주 연 4%(최대 40%)로 단순화했습니다. 단기 보유는 1년 미만 70%, 2년 미만 60%(주택 기준), 장기보유특별공제 없음. 기본공제 250만 원, 세율은 종합소득세 기본세율이며 지방소득세 10%를 가산합니다. 다주택 중과·조합원입주권·분양권·상속 등은 반영하지 않았으니 세무 전문가와 확인하세요.',
+      fields: [
+        { k: 'sale', l: '양도가액', d: '1500000000' }, { k: 'cost', l: '취득가액', d: '900000000' }, { k: 'exp', l: '필요경비 (중개보수, 취득세 등)', d: '30000000', opt: true },
+        { k: 'hold', l: '보유기간 (년)', d: '6' }, { k: 'live', l: '거주기간 (년, 1세대1주택)', d: '6', opt: true },
+        { k: 'typ', l: '구분', t: 'sel', d: 'one', opts: [['one', '1세대1주택 (2년 보유·거주 요건 충족 가정)'], ['gen', '일반 (기본세율)'], ['short', '단기 보유 (2년 미만)']] },
+        { k: 'exm', l: '비과세 한도 (고가주택 기준, 원)', d: '1200000000', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['sale', 'cost', 'hold']);
+        const exp = optN(v.exp, 0), gain = v.sale - v.cost - exp;
+        if (gain <= 0) return { rows: [['양도차익', money(gain, 0)], ['산출세액', '0 (양도차손)']] };
+        const rows = [['양도차익', money(gain, 0)]];
+        let taxGain = gain, lt = 0;
+        if (v.typ === 'one') {
+          const th = optN(v.exm, 1.2e9);
+          if (v.sale <= th) return { rows: [...rows, ['과세 여부', '비과세 (양도가 ≤ ' + money(th, 0) + ')'], ['양도소득세', '0', true]] };
+          taxGain = (gain * (v.sale - th)) / v.sale;
+          const hy = Math.floor(v.hold), ly = Math.floor(optN(v.live, 0));
+          lt = (hy >= 3 ? Math.min(40, 4 * hy) : 0) + (ly >= 2 ? Math.min(40, 4 * ly) : 0);
+          rows.push(['고가주택 과세 양도차익', money(taxGain, 0)]);
+        } else if (v.typ === 'gen') { const hy = Math.floor(v.hold); lt = hy >= 3 ? Math.min(30, 2 * hy) : 0; }
+        const ded = (taxGain * lt) / 100, base = Math.max(0, taxGain - ded - 2.5e6);
+        let tax, rate;
+        if (v.typ === 'short') { rate = v.hold < 1 ? 70 : v.hold < 2 ? 60 : null; if (rate === null) throw new Error('단기 보유는 2년 미만이어야 합니다'); tax = base * (rate / 100); }
+        else { const r = bracketTax(base, INC_TB); tax = r.tax; rate = r.mr; }
+        rows.push(['장기보유특별공제율', lt + ' %'], ['장기보유특별공제액', money(ded, 0)], ['양도소득 기본공제', money(2.5e6, 0)], ['과세표준', money(base, 0)], ['적용 (한계)세율', rate + ' %'], ['양도소득세', money(tax, 0), true], ['지방소득세 (10%)', money(tax * 0.1, 0)], ['합계 세부담', money(tax * 1.1, 0), true], ['세후 차익', money(gain - tax * 1.1, 0)]);
+        return { rows };
+      },
+    },
+    {
+      id: 'yield', name: '임대수익률 · 갭투자 · 레버리지',
+      note: '표면수익률 = 연 임대료 ÷ 매매가. 실투자금 = 매매가 − 보증금 − 대출 + 취득 부대비용. 세전 실투자수익률 = (연 임대료 × (1 − 공실률) − 운영비 − 대출이자) ÷ 실투자금. 전세만 놓는 갭투자는 월세 0, 보증금에 전세금을 넣으세요. 가격상승률을 넣으면 시세차익까지 합한 총수익률을 구합니다. 세금(종합·양도), 보증금 운용수익은 반영하지 않았습니다.',
+      fields: [
+        { k: 'price', l: '매매가', d: '1000000000' }, { k: 'dep', l: '임차 보증금', d: '100000000' }, { k: 'rent', l: '월세', d: '2500000' },
+        { k: 'vac', l: '공실률 (%)', d: '5', opt: true }, { k: 'opx', l: '연 운영비·재산세 등', d: '6000000', opt: true },
+        { k: 'loan', l: '대출금', d: '500000000', opt: true }, { k: 'lr', l: '대출금리 (연 %)', d: '4', opt: true }, { k: 'cl', l: '취득 부대비용', d: '20000000', opt: true },
+        { k: 'ap', l: '연 가격상승률 (%, 선택)', d: '', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['price']);
+        const loan = optN(v.loan, 0), inv = v.price - v.dep - loan + optN(v.cl, 0);
+        if (!(inv > 0)) throw new Error('실투자금이 0 이하입니다. 보증금·대출을 확인하세요');
+        const gross = v.rent * 12, eff = gross * (1 - optN(v.vac, 0) / 100), intr = (loan * optN(v.lr, 0)) / 100, noi = eff - optN(v.opx, 0), net = noi - intr;
+        const rows = [['표면수익률 (연 임대료/매매가)', pct(gross / v.price)], ['순영업소득 NOI (공실·운영비 반영)', money(noi, 0)], ['Cap Rate (NOI/매매가)', pct(noi / v.price)], ['실투자금', money(inv, 0), true], ['연 대출이자', money(intr, 0)], ['세전 연 순현금흐름', money(net, 0)], ['세전 실투자수익률 (현금)', pct(net / inv), true]];
+        if (v.ap !== null) rows.push(['시세차익 포함 연 총수익률', pct((net + (v.price * v.ap) / 100) / inv), true]);
+        if (v.rent === 0) rows.push(['갭 (매매가 − 보증금)', money(v.price - v.dep, 0)], ['전세가율', pct(v.dep / v.price)]);
+        return { rows };
+      },
+    },
+    {
+      id: 'jeonse', name: '전세 안전성 (전세가율 · 보증금 회수 가능성)',
+      note: '전세가율 = 보증금 ÷ 시세. 담보비율 = (선순위 채권 + 보증금) ÷ 시세. 경매 시 예상 회수액 = 시세 × 낙찰가율 − 경매비용 − 선순위 채권(근저당 채권최고액, 확정일자 선순위 임차보증금 등) 후 잔액과 내 보증금을 비교합니다. 소액임차인 최우선변제, 세금 체납 법정기일 우선 등은 반영하지 않으므로 등기부등본과 확정일자 현황을 확인하세요. 일반적으로 담보비율이 70~80%를 넘으면 위험하다고 봅니다(기준은 참고용).',
+      fields: [
+        { k: 'price', l: '시세 (매매가)', d: '500000000' }, { k: 'dep', l: '내 보증금', d: '350000000' }, { k: 'sen', l: '선순위 채권 (근저당 채권최고액 등)', d: '100000000' },
+        { k: 'bid', l: '예상 낙찰가율 (%)', d: '80' }, { k: 'cost', l: '경매비용 비율 (%)', d: '2', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['price', 'dep', 'bid']);
+        const sen = v.sen, ratio = (sen + v.dep) / v.price, auction = v.price * (v.bid / 100), net = auction * (1 - optN(v.cost, 0) / 100), after = Math.max(0, net - sen), back = Math.min(v.dep, after);
+        return { rows: [['전세가율', pct(v.dep / v.price)], ['담보비율 (선순위 + 보증금)/시세', pct(ratio), true], ['예상 낙찰가', money(auction, 0)], ['비용 제외 낙찰 순액', money(net, 0)], ['선순위 변제 후 잔액', money(after, 0)], ['예상 보증금 회수액', money(back, 0), true], ['회수 부족액', money(v.dep - back, 0)], ['판정', back >= v.dep ? (ratio <= 0.7 ? '비교적 안전 (참고)' : '회수 가능하나 여유 적음') : '위험: 경매 시 보증금 일부 미회수 가능', true]] };
+      },
+    },
+    {
+      id: 'area', name: '면적 · 평당가 (전용률)',
+      note: '1평 = 400/121 ≈ 3.3058㎡. 공급면적(분양면적), 전용면적, 가격 중 아는 값을 넣으면 평 환산, 전용률(전용면적 ÷ 공급면적), 평당가를 계산합니다. 공급면적 = 전용면적 + 주거공용면적이며, 계약면적은 거기에 기타 공용면적(주차장 등)을 더한 값입니다.',
+      fields: [
+        { k: 'sup', l: '공급면적 (㎡)', d: '112', opt: true }, { k: 'ex', l: '전용면적 (㎡)', d: '84', opt: true }, { k: 'price', l: '가격 (원)', d: '1200000000', opt: true },
+      ],
+      compute(v) {
+        const rows = [];
+        if (v.sup !== null) { positive(v, ['sup']); rows.push(['공급면적', v.sup + ' ㎡ = ' + (v.sup / PYEONG).toFixed(2) + ' 평']); }
+        if (v.ex !== null) { positive(v, ['ex']); rows.push(['전용면적', v.ex + ' ㎡ = ' + (v.ex / PYEONG).toFixed(2) + ' 평']); }
+        if (v.sup !== null && v.ex !== null) rows.push(['전용률', pct(v.ex / v.sup), true], ['주거공용면적', (v.sup - v.ex).toFixed(2) + ' ㎡']);
+        if (v.price !== null) {
+          positive(v, ['price']);
+          if (v.sup !== null) rows.push(['공급면적 평당가', money(v.price / (v.sup / PYEONG), 0), true], ['공급면적 ㎡당가', money(v.price / v.sup, 0)]);
+          if (v.ex !== null) rows.push(['전용면적 평당가', money(v.price / (v.ex / PYEONG), 0), true], ['전용면적 ㎡당가', money(v.price / v.ex, 0)]);
+        }
+        if (!rows.length) throw new Error('값을 하나 이상 입력하세요');
+        return { rows };
+      },
+    },
+    {
+      id: 'prorate', name: '일할 계산 (월세 · 관리비 · 이자)',
+      note: '입주·퇴거일이 월 중간일 때 월세와 관리비를 사용일수로 나눠 계산합니다. 일할액 = 월 금액 ÷ 해당 월 일수 × 사용일수. 사용일수는 시작일과 종료일을 모두 포함합니다. 당사자 합의(30일 기준 등)에 따라 다를 수 있습니다.',
+      fields: [
+        { k: 'rent', l: '월세', d: '1000000' }, { k: 'mf', l: '관리비 (월)', d: '150000', opt: true },
+        { k: 'dm', l: '해당 월의 일수', d: '31' }, { k: 'sd', l: '사용 시작일 (일)', d: '12' }, { k: 'ed', l: '사용 종료일 (일, 월말이면 일수)', d: '31' },
+      ],
+      compute(v) {
+        const dm = Math.round(v.dm), sd = Math.round(v.sd), ed = Math.round(v.ed);
+        if (dm < 28 || dm > 31 || sd < 1 || ed < sd || ed > dm) throw new Error('일수와 시작·종료일을 확인하세요');
+        const used = ed - sd + 1, f = used / dm;
+        return { rows: [['사용일수', used + ' / ' + dm + ' 일'], ['일할 월세', money(v.rent * f, 0), true], ['일할 관리비', money(optN(v.mf, 0) * f, 0)], ['합계', money((v.rent + optN(v.mf, 0)) * f, 0), true], ['일 단가 (월세)', money(v.rent / dm, 0)]] };
+      },
+    },
+  ];
+  const EGROUPS = [
+    ['중개 · 계약', ['fee', 'cvt', 'prorate', 'area']],
+    ['대출 · 세금', ['loanmax', 'acq', 'cgt']],
+    ['수익 · 위험', ['yield', 'jeonse']],
+  ];
+  // ESTATE END
 
-  const labState = { tool: 'dil', atool: 'tvm', vals: {} };
+  const labState = { tool: 'dil', atool: 'tvm', etool: 'fee', vals: {} };
   try { Object.assign(labState, JSON.parse(localStorage.getItem('pf-lab') || '{}')); } catch (e) {}
-  const saveLab = () => { try { localStorage.setItem('pf-lab', JSON.stringify({ tool: labState.tool, atool: labState.atool, vals: labState.vals })); } catch (e) {} };
+  const saveLab = () => { try { localStorage.setItem('pf-lab', JSON.stringify({ tool: labState.tool, atool: labState.atool, etool: labState.etool, vals: labState.vals })); } catch (e) {} };
   const labEl = { ctl: {} };
-  const suite = () => (state.mode === 'acct'
-    ? { tools: ATOOLS, groups: AGROUPS, get: () => labState.atool, set: (x) => { labState.atool = x; } }
-    : { tools: TOOLS, groups: GROUPS, get: () => labState.tool, set: (x) => { labState.tool = x; } });
+  const suite = () => (state.mode === 'estate'
+    ? { tools: ETOOLS, groups: EGROUPS, get: () => labState.etool, set: (x) => { labState.etool = x; } }
+    : state.mode === 'acct'
+      ? { tools: ATOOLS, groups: AGROUPS, get: () => labState.atool, set: (x) => { labState.atool = x; } }
+      : { tools: TOOLS, groups: GROUPS, get: () => labState.tool, set: (x) => { labState.tool = x; } });
   const SCI_NUM = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
   function parseNum(raw) {
     if (SCI_NUM.test(raw)) return parseFloat(raw);
