@@ -577,7 +577,7 @@ function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', '�
   }
 
   // ---- 환율·단위 변환
-  // 환율은 외부 조회가 막혀 있어 기준일 값을 내장하고, 직접 수정한 값은 이 브라우저에만 저장한다.
+  // 환율은 기준일 값을 내장하고, 가능하면 open.er-api.com에서 최신 값을 불러온다. 직접 수정한 값은 이 브라우저에만 저장한다.
   const FX = { date: '2026-10-16', src: 'open.er-api.com', rates: { KRW: 1342.74, USD: 1, JPY: 158.087, EUR: 0.89165, CNY: 6.70299, GBP: 0.75405, AUD: 1.44602, CAD: 1.41915, CHF: 0.82829, HKD: 7.84743, SGD: 1.28234, THB: 33.5261, VND: 25856.49, TWD: 32.3603, PHP: 63.0843, INR: 95.1001, AED: 3.6725 } };
   const FXN = { KRW: '대한민국 원', USD: '미국 달러', JPY: '일본 엔', EUR: '유로', CNY: '중국 위안', GBP: '영국 파운드', AUD: '호주 달러', CAD: '캐나다 달러', CHF: '스위스 프랑', HKD: '홍콩 달러', SGD: '싱가포르 달러', THB: '태국 바트', VND: '베트남 동', TWD: '대만 달러', PHP: '필리핀 페소', INR: '인도 루피', AED: 'UAE 디르함' };
   const UNITS = {
@@ -593,9 +593,33 @@ function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', '�
   let fxSaved = {};
   try { fxSaved = JSON.parse(localStorage.getItem('pf-fx') || '{}'); } catch (e) { fxSaved = {}; }
   const saveFx = () => { try { localStorage.setItem('pf-fx', JSON.stringify(fxSaved)); } catch (e) {} };
-  const fxRates = () => Object.assign({}, FX.rates, fxSaved);
+  let fxLive = null;
+  try { fxLive = JSON.parse(localStorage.getItem('pf-fxlive') || 'null'); } catch (e) { fxLive = null; }
+  const fxRates = () => Object.assign({}, FX.rates, fxLive && fxLive.rates ? fxLive.rates : {}, fxSaved);
+  let fxStatus = '';
+  async function loadFxLive() {
+    try {
+      const ctl = new AbortController();
+      const tm = setTimeout(() => ctl.abort(), 8000);
+      const r = await fetch('https://open.er-api.com/v6/latest/USD', { cache: 'no-store', signal: ctl.signal });
+      clearTimeout(tm);
+      const j = await r.json();
+      if (j.result !== 'success' || !j.rates) throw new Error('bad');
+      const rates = {};
+      Object.keys(FX.rates).forEach((k) => { if (j.rates[k] > 0) rates[k] = j.rates[k]; });
+      if (!rates.KRW) throw new Error('no KRW');
+      fxLive = { date: new Date(j.time_last_update_unix * 1000).toISOString().slice(0, 10), rates, at: Date.now() };
+      try { localStorage.setItem('pf-fxlive', JSON.stringify(fxLive)); } catch (e) {}
+      fxStatus = '불러오기 성공: ' + fxLive.date + ' 기준 환율로 갱신했습니다.';
+      return true;
+    } catch (e) {
+      fxStatus = '불러오기 실패: 네트워크가 없거나 이 환경에서 외부 조회가 막혀 있습니다. 기존 값을 그대로 씁니다.';
+      return false;
+    }
+  }
   const h = (tag, props, ...kids) => { const e = document.createElement(tag); Object.assign(e, props || {}); e.append(...kids); return e; };
   const cvEl = {};
+  let autoFx = false;
   const isFx = () => state.mode === 'fx';
   const keysOf = () => (isFx() ? Object.keys(FX.rates) : Object.keys(UNITS[state.cv.cat]));
   const labelOf = (k) => (isFx() ? k + ' · ' + FXN[k] : k);
@@ -672,7 +696,11 @@ function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', '�
     parts.push(h('div', { className: 'cv-row' }, amount, from), swap, h('div', { className: 'cv-row' }, cvEl.out, to), cvEl.all);
     if (isFx()) {
       const note = h('p', { className: 'cv-note' });
-      note.textContent = '기준일 ' + FX.date + ' (' + FX.src + ') 참고값입니다. 실시간 환율이나 은행·환전소의 적용 환율과 다릅니다. 필요하면 아래에서 직접 수정하세요.';
+      note.textContent = (fxLive ? '기준일 ' + fxLive.date + ' (open.er-api.com, 불러온 값)' : '기준일 ' + FX.date + ' (내장 스냅샷)') + ' 참고값입니다. 이 환율은 하루 1회 갱신되는 시장 중간값이라 은행·환전소의 적용 환율(매매기준율, 스프레드)과 다릅니다. 필요하면 아래에서 직접 수정하세요.';
+      const live = h('button', { type: 'button', className: 'pill', textContent: '최신 환율 불러오기' });
+      const stat = h('p', { className: 'cv-note', textContent: fxStatus });
+      stat.setAttribute('aria-live', 'polite');
+      live.addEventListener('click', async () => { live.disabled = true; live.textContent = '불러오는 중…'; await loadFxLive(); if (isFx()) { buildConv(); render(); } });
       const grid = h('div', { className: 'cv-rates' });
       const saved = fxRates();
       Object.keys(FX.rates).filter((k) => k !== 'USD').forEach((k) => {
@@ -683,9 +711,10 @@ function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', '�
         });
         grid.append(h('label', { htmlFor: 'fx-' + k }, '1 USD = ' + k, inp));
       });
-      const reset = h('button', { type: 'button', className: 'pill', textContent: '기준일 값으로 되돌리기' });
+      const reset = h('button', { type: 'button', className: 'pill', textContent: '직접 수정한 값 지우기' });
       reset.addEventListener('click', () => { fxSaved = {}; saveFx(); buildConv(); render(); });
-      parts.push(note, h('details', {}, h('summary', { textContent: '환율 직접 수정' }), grid, h('p', {}, reset)));
+      parts.push(note, h('p', {}, live), stat, h('details', {}, h('summary', { textContent: '환율 직접 수정' }), grid, h('p', {}, reset)));
+      if (!autoFx) { autoFx = true; if (!fxLive || Date.now() - (fxLive.at || 0) > 6 * 3600 * 1000) loadFxLive().then((ok) => { if (ok && isFx()) { buildConv(); render(); } }); }
     }
     box.replaceChildren(...parts);
     updateConv();
@@ -2971,6 +3000,188 @@ function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', '�
     ['경제 · 경영', ['sd', 'macro', 'forecast', 'pert', 'mm1', 'learn']],
   ].forEach((g) => AGROUPS.push(g));
   // ACCT2 END
+  // ACCT3 START
+  const gl = (x) => (Math.abs(x) < 0.005 ? '0' : (x > 0 ? '이익 ' : '손실 ') + money(Math.abs(x)));
+  const ATOOLS3 = [
+    {
+      id: 'fxm', name: '외화환산 ① 화폐성 항목 (외화채권·채무 · 외환차손익)',
+      note: 'K-IFRS 1021: 화폐성 외화항목은 보고기간 말 마감환율로 환산하고, 환산손익과 결제 시 외환차손익은 당기손익입니다. 외화채권은 환율이 오르면 이익, 외화채무는 환율이 오르면 손실입니다. 선급금·선수금과 재고·유형자산은 화폐성 항목이 아니어서 환산하지 않습니다(다음 도구). 환율은 외화 1단위당 원화입니다.',
+      fields: [
+        { k: 'kind', l: '항목', t: 'sel', d: 'ar', opts: [['ar', '외화채권 (매출채권, 대여금, 예금)'], ['ap', '외화채무 (매입채무, 차입금, 사채)']] },
+        { k: 'amt', l: '외화금액', d: '10000' }, { k: 'r0', l: '발생일 환율', d: '1300' }, { k: 'r1', l: '보고기간말 마감환율', d: '1350' },
+        { k: 'r2', l: '결제일 환율 (선택)', d: '1320', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['amt', 'r0', 'r1']);
+        const sg = v.kind === 'ar' ? 1 : -1, k0 = v.amt * v.r0, k1 = v.amt * v.r1;
+        const rows = [['발생 시 원화 장부금액', money(k0)], ['기말 환산 후 원화 장부금액', money(k1)], ['외화환산손익 (기말)', gl(sg * (k1 - k0)), true]];
+        if (v.r2 !== null) { positive(v, ['r2']); const k2 = v.amt * v.r2; rows.push(['결제 원화금액', money(k2)], ['외환차손익 (결제 시)', gl(sg * (k2 - k1)), true], ['총 외환손익 (환산 + 외환차)', gl(sg * (k2 - k0))]); }
+        return { rows };
+      },
+    },
+    {
+      id: 'fxn', name: '외화환산 ② 비화폐성 항목 (유형자산 · 재고자산 저가법)',
+      note: '원가로 측정하는 비화폐성 항목은 취득일(역사적) 환율을 유지합니다. 공정가치로 측정(재평가모형)하는 항목은 공정가치를 측정한 날의 환율로 환산합니다. 재고자산 저가법은 원가(취득일 환율)와 순실현가능가치(NRV, 측정일 환율)를 각각 원화로 바꿔 비교하며 환율 변동이 평가손실에 반영됩니다. 재평가 증가분은 기타포괄손익(재평가잉여금), 감소분은 당기손익(기존 재평가잉여금 없을 때)으로 보았습니다.',
+      fields: [
+        { k: 'm', l: '측정 방법', t: 'sel', d: 'inv', opts: [['cost', '유형자산 원가모형'], ['reval', '유형자산 재평가모형'], ['inv', '재고자산 저가법']] },
+        { k: 'cfc', l: '취득원가 (외화)', d: '10000' }, { k: 'r0', l: '취득일 환율', d: '1300' },
+        { k: 'ffc', l: '공정가치 또는 NRV (외화)', d: '9500', opt: true }, { k: 'r1', l: '측정일(기말) 환율', d: '1250', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['cfc', 'r0']);
+        const kc = v.cfc * v.r0;
+        if (v.m === 'cost') return { rows: [['원가모형 장부금액 (역사적 환율)', money(kc), true], ['환율 변동 영향', '없음 (환산하지 않음)']] };
+        if (v.ffc === null || v.r1 === null) throw new Error('공정가치(NRV)와 측정일 환율을 입력하세요');
+        positive(v, ['ffc', 'r1']);
+        const kf = v.ffc * v.r1;
+        if (v.m === 'reval') return { rows: [['원가 (원화)', money(kc)], ['공정가치 (원화, 측정일 환율)', money(kf), true], [kf >= kc ? '재평가증가 (기타포괄손익)' : '재평가감소 (당기손익)', money(Math.abs(kf - kc)), true], ['  이 중 외화 공정가치 변동분', money((v.ffc - v.cfc) * v.r1)], ['  이 중 환율 변동분', money(v.cfc * (v.r1 - v.r0))]] };
+        const loss = Math.max(0, kc - kf);
+        return { rows: [['원가 (원화, 취득일 환율)', money(kc)], ['순실현가능가치 (원화, 측정일 환율)', money(kf)], ['기말 재고자산 장부금액 (저가)', money(Math.min(kc, kf)), true], ['재고자산평가손실', money(loss), true], ['  외화 기준으로는', v.ffc < v.cfc ? '외화 NRV < 외화 원가 (평가손실 있음)' : '외화 NRV ≥ 외화 원가 (외화로는 평가손실 없음)']] };
+      },
+    },
+    {
+      id: 'fxs', name: '외화환산 ③ 해외사업장 (기능통화 → 표시통화 · 환산차이)',
+      note: '해외사업장 재무제표를 표시통화로 환산: 자산·부채는 마감환율, 수익·비용은 거래일 환율(평균환율로 근사), 자본은 역사적 환율입니다. 환산차이(OCI, 해외사업장환산손익)는 기초 순자산 환산액(전기 말 환율) + 환산 순이익 − 환산 배당과 기말 순자산 환산액의 차이입니다. 처분 시 누적환산차이는 당기손익으로 재분류합니다. 순투자의 헤지·초인플레이션은 반영하지 않습니다.',
+      fields: [
+        { k: 'na0', l: '기초 순자산 (외화)', d: '1000' }, { k: 'ro', l: '전기 말(기초) 환율', d: '1300' },
+        { k: 'ni', l: '당기순이익 (외화)', d: '200' }, { k: 'ra', l: '당기 평균환율', d: '1320' },
+        { k: 'dv', l: '배당 (외화)', d: '50', opt: true }, { k: 'rd', l: '배당 결의일 환율', d: '1330', opt: true },
+        { k: 're', l: '기말 마감환율', d: '1350' }, { k: 'c0', l: '기초 누적환산차이 (원화, 선택)', d: '0', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['ro', 'ra', 're']);
+        const dv = optN(v.dv, 0), rd = v.rd === null ? v.ra : v.rd, c0 = optN(v.c0, 0);
+        const na1 = v.na0 + v.ni - dv, open = v.na0 * v.ro, kni = v.ni * v.ra, kdv = dv * rd, close = na1 * v.re, cta = close - (open + kni - kdv);
+        return { rows: [['기말 순자산 (외화)', money(na1)], ['기초 순자산 환산액', money(open)], ['환산 당기순이익 (평균환율)', money(kni)], ['환산 배당 (배당일 환율)', money(kdv)], ['기말 순자산 환산액 (마감환율)', money(close), true], ['당기 환산차이 (기타포괄손익)', gl(cta), true], ['기말 누적환산차이', money(c0 + cta)]] };
+      },
+    },
+    {
+      id: 'fxh', name: '외화환산 ④ 외화채권 + 선물환 매도 (헤지 효과)',
+      note: '외화채권을 선물환 매도로 헤지한 경우의 단순 모형입니다. 채권 환산손익 = 외화금액 × (기말 현물환율 − 거래일 현물환율), 선물환 평가손익(매도) = 외화금액 × (계약 선물환율 − 기말 잔존 선물환율). 선물환 프리미엄(계약 선물환율 − 거래일 현물환율)은 계약기간에 걸쳐 배분합니다. 시간가치 할인과 헤지 비효과성은 반영하지 않습니다.',
+      fields: [
+        { k: 'amt', l: '외화채권 금액', d: '100000' }, { k: 's0', l: '거래일 현물환율', d: '1300' }, { k: 'r1', l: '기말 현물환율', d: '1350' },
+        { k: 'f0', l: '계약 선물환율', d: '1320' }, { k: 'f1', l: '기말 잔존만기 선물환율', d: '1362' },
+        { k: 'tm', l: '총 계약기간 (개월)', d: '6' }, { k: 'em', l: '경과 기간 (개월)', d: '3' },
+      ],
+      compute(v) {
+        positive(v, ['amt', 's0', 'r1', 'f0', 'f1', 'tm']);
+        if (v.em < 0 || v.em > v.tm) throw new Error('경과 기간은 0 이상 총 기간 이하여야 합니다');
+        const rec = v.amt * (v.r1 - v.s0), fw = v.amt * (v.f0 - v.f1), prem = v.amt * (v.f0 - v.s0);
+        return { rows: [['외화채권 환산손익', gl(rec)], ['선물환 평가손익 (매도)', gl(fw)], ['순 외환손익 (헤지 후)', gl(rec + fw), true], ['선물환 프리미엄 총액', gl(prem)], ['  당기 배분액 (경과 기간 비례)', gl((prem * v.em) / v.tm), true]], notes: ['순 외환손익이 0에 가까울수록 헤지가 효과적입니다. 차이는 선물환 프리미엄 변동 때문입니다.'] };
+      },
+    },
+    {
+      id: 'cons', name: '연결 ① 지배·비지배 귀속 (영업권 · NCI · 연결순이익)',
+      note: '취득 후 1년째 연결입니다. 영업권 = 이전대가 + 비지배지분 − 식별가능순자산 공정가치(비지배지분은 비례지분 또는 공정가치로 측정). 종속기업의 순이익에서 공정가치 차액 상각을 차감한 조정순이익을 지분율대로 지배·비지배에 배분합니다. 모회사 별도 순이익에는 종속기업에서 받은 배당수익을 제외한 금액을 넣으세요(배당수익은 연결에서 제거). 영업권 손상 시 비례법은 전액 지배기업 귀속으로 봅니다. 내부거래는 다음 도구에서 조정하세요.',
+      fields: [
+        { k: 'cost', l: '이전대가 (투자주식 취득원가)', d: '9000000' }, { k: 'p', l: '지배기업 지분율 (%)', d: '80' },
+        { k: 'eq', l: '취득일 종속기업 순자산 장부금액', d: '9000000' }, { k: 'fvd', l: '공정가치 − 장부 차액 (식별가능순자산)', d: '1000000' },
+        { k: 'life', l: '차액 상각연수 (0 = 토지 등 비상각)', d: '5' },
+        { k: 'mth', l: '비지배지분 측정', t: 'sel', d: 'prop', opts: [['prop', '비례지분'], ['fv', '공정가치']] }, { k: 'ncifv', l: '비지배지분 공정가치 (공정가치법)', d: '2200000', opt: true },
+        { k: 'pni', l: '지배기업 별도 순이익 (배당수익 제외)', d: '3000000' }, { k: 'sni', l: '종속기업 당기순이익', d: '1000000' }, { k: 'sdv', l: '종속기업 배당 총액', d: '200000', opt: true },
+        { k: 'gwi', l: '영업권 손상차손 (선택)', d: '0', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['cost', 'p']);
+        if (v.p > 100) throw new Error('지분율은 100% 이하여야 합니다');
+        const p = v.p / 100, fvn = v.eq + v.fvd, nci0 = v.mth === 'prop' ? (1 - p) * fvn : v.ncifv;
+        if (nci0 === null) throw new Error('비지배지분 공정가치를 입력하세요');
+        const gw = v.cost + nci0 - fvn, am = v.life > 0 ? v.fvd / v.life : 0, adj = v.sni - am, gwi = optN(v.gwi, 0);
+        const nciNi = (1 - p) * adj, par = v.pni + p * adj - gwi, cni = v.pni + adj - gwi, ncie = nci0 + nciNi - (1 - p) * optN(v.sdv, 0);
+        return { rows: [['영업권', gw >= 0 ? money(gw) : '염가매수차익 ' + money(-gw), true], ['취득일 비지배지분', money(nci0)], ['공정가치 차액 상각', money(am)], ['종속기업 조정순이익', money(adj)], ['연결 당기순이익', money(cni), true], ['  지배기업 귀속', money(par), true], ['  비지배지분 귀속', money(nciNi), true], ['기말 비지배지분', money(ncie), true], ['기말 영업권 (손상 후)', money(Math.max(gw, 0) - gwi)]] };
+      },
+    },
+    {
+      id: 'intg', name: '연결 ② 내부거래 미실현이익 제거 (재고 · 유형자산)',
+      note: '내부거래로 발생한 미실현이익을 연결에서 제거합니다. 재고자산: 기말 미실현이익 = 내부판매액 × 기말 미판매 비율 × 판매회사 매출총이익률. 유형자산: 양도차익을 잔존내용연수에 걸쳐 실현(감가상각비 과대분 환입)하며 양도 해(k=1) 말 미실현이익 = 양도차익 × (1 − 1/n). 당기손익 효과 = −(기말 − 기초 미실현이익) × (1 − 세율). 하향거래(모회사→종속)는 전액 지배기업, 상향거래(종속→모회사)는 지분율대로 지배·비지배에 배분합니다.',
+      fields: [
+        { k: 'kind', l: '거래 유형', t: 'sel', d: 'inv', opts: [['inv', '재고자산'], ['ppe', '감가상각자산 (유형자산)']] },
+        { k: 'dir', l: '거래 방향', t: 'sel', d: 'up', opts: [['down', '하향 (모회사 → 종속기업)'], ['up', '상향 (종속기업 → 모회사)']] },
+        { k: 'p', l: '지배기업 지분율 (%)', d: '80' }, { k: 'tax', l: '법인세율 (%, 선택)', d: '0', opt: true },
+        { k: 'sale', l: '[재고] 내부 판매액', d: '1000000', opt: true }, { k: 'gpr', l: '[재고] 판매회사 매출총이익률 (%)', d: '20', opt: true },
+        { k: 'rem', l: '[재고] 기말 미판매 비율 (%)', d: '40', opt: true }, { k: 'beg', l: '[재고] 기초 미실현이익', d: '0', opt: true },
+        { k: 'price', l: '[유형자산] 양도가액', d: '1000000', opt: true }, { k: 'bv', l: '[유형자산] 양도 시 장부금액', d: '700000', opt: true },
+        { k: 'n', l: '[유형자산] 잔존내용연수 (년)', d: '5', opt: true }, { k: 'k', l: '[유형자산] 양도 후 경과연수 (양도 해 = 1)', d: '1', opt: true },
+      ],
+      compute(v) {
+        const p = v.p / 100, t = optN(v.tax, 0) / 100;
+        if (!(p > 0 && p <= 1) || t < 0 || t >= 1) throw new Error('지분율과 세율을 확인하세요');
+        let beg, end;
+        const rows = [];
+        if (v.kind === 'inv') {
+          if (v.sale === null || v.gpr === null || v.rem === null) throw new Error('재고자산 항목을 입력하세요');
+          positive(v, ['sale']);
+          end = (v.sale * (v.rem / 100) * v.gpr) / 100; beg = optN(v.beg, 0);
+          rows.push(['기말 미실현이익', money(end)], ['기초 미실현이익', money(beg)], ['연결조정: 매출·매출원가 상계', money(v.sale)]);
+        } else {
+          if (v.price === null || v.bv === null || v.n === null || v.k === null) throw new Error('유형자산 항목을 입력하세요');
+          const n = Math.round(v.n), k = Math.round(v.k);
+          if (n < 1 || k < 1 || k > n) throw new Error('잔존내용연수와 경과연수를 확인하세요 (1 ≤ 경과 ≤ 연수)');
+          const gain = v.price - v.bv;
+          end = gain * (1 - k / n); beg = k === 1 ? 0 : gain * (1 - (k - 1) / n);
+          rows.push(['양도차익 (내부 미실현)', money(gain)], ['연 실현액 (감가상각비 과대분 환입)', money(gain / n)], ['기초 미실현이익', money(beg)], ['기말 미실현이익', money(end)]);
+        }
+        const eff = -(end - beg) * (1 - t), dta = (end - beg) * t;
+        rows.push(['당기 연결순이익 효과 (세후)', gl(eff), true]);
+        if (t > 0) rows.push(['이연법인세자산 증감', money(dta)]);
+        if (v.dir === 'down') rows.push(['  지배기업 귀속', gl(eff)], ['  비지배지분 귀속', '0']);
+        else rows.push(['  지배기업 귀속', gl(eff * p)], ['  비지배지분 귀속', gl(eff * (1 - p))]);
+        return { rows };
+      },
+    },
+    {
+      id: 'step', name: '연결 ③ 단계취득 (기존지분 재측정 · 영업권)',
+      note: '지배력을 얻는 시점에 기존 보유지분을 공정가치로 재측정해 평가손익을 당기손익으로 인식하고(이전에 OCI로 인식한 금액은 해당 자산의 처분 기준에 따름), 영업권 = 추가 이전대가 + 기존지분 공정가치 + 비지배지분 − 식별가능순자산 공정가치로 계산합니다.',
+      fields: [
+        { k: 'pp', l: '기존 보유지분율 (%)', d: '20' }, { k: 'pbv', l: '기존 보유지분 장부금액', d: '1800000' }, { k: 'pfv', l: '기존 보유지분 공정가치', d: '2200000' },
+        { k: 'ap', l: '추가 취득지분율 (%)', d: '40' }, { k: 'ac', l: '추가 취득 대가', d: '4600000' },
+        { k: 'na', l: '식별가능순자산 공정가치 (100%)', d: '10000000' },
+        { k: 'mth', l: '비지배지분 측정', t: 'sel', d: 'prop', opts: [['prop', '비례지분'], ['fv', '공정가치']] }, { k: 'ncifv', l: '비지배지분 공정가치', d: '', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['pp', 'ap', 'na']);
+        const tp = v.pp + v.ap;
+        if (tp > 100 || tp <= 50) throw new Error('합계 지분율은 50% 초과 100% 이하여야 합니다(지배력 획득)');
+        const nci = v.mth === 'prop' ? (1 - tp / 100) * v.na : v.ncifv;
+        if (nci === null) throw new Error('비지배지분 공정가치를 입력하세요');
+        const gw = v.ac + v.pfv + nci - v.na;
+        return { rows: [['기존지분 재측정 평가손익 (당기손익)', gl(v.pfv - v.pbv), true], ['총 이전대가 (추가대가 + 기존지분 공정가치)', money(v.ac + v.pfv)], ['비지배지분', money(nci)], [gw >= 0 ? '영업권' : '염가매수차익', money(Math.abs(gw)), true], ['취득 후 지배지분율', tp + ' %']] };
+      },
+    },
+    {
+      id: 'ncieq', name: '연결 ④ 지배력 유지 지분거래 (자본거래)',
+      note: '지배력을 유지한 채 종속기업 지분을 추가 취득하거나 일부 처분하면 자본거래입니다. 비지배지분을 조정하고, 대가와 조정액의 차이는 당기손익이 아니라 자본(지배기업 소유주 귀속)으로 처리합니다. 조정액 = 처분(취득) 지분율 × 종속기업 순자산(영업권 제외, 비지배지분 비례지분법 기준)입니다.',
+      fields: [
+        { k: 'kind', l: '거래', t: 'sel', d: 'sell', opts: [['sell', '일부 처분 (비지배지분 증가)'], ['buy', '추가 취득 (비지배지분 감소)']] },
+        { k: 'x', l: '거래 지분율 (%포인트)', d: '10' }, { k: 'na', l: '종속기업 순자산 (공정가치 조정 반영, 영업권 제외)', d: '10000000' }, { k: 'pay', l: '거래 대가 (수취/지급)', d: '1500000' },
+      ],
+      compute(v) {
+        positive(v, ['x', 'na', 'pay']);
+        const adj = (v.x / 100) * v.na, diff = v.kind === 'sell' ? v.pay - adj : adj - v.pay;
+        return { rows: [['비지배지분 ' + (v.kind === 'sell' ? '증가' : '감소') + '액', money(adj), true], ['자본 조정 (자본잉여금 등)', (diff >= 0 ? '증가 ' : '감소 ') + money(Math.abs(diff)), true], ['당기손익 영향', '없음 (자본거래)']] };
+      },
+    },
+    {
+      id: 'ctrl', name: '연결 ⑤ 지배력 상실 (처분손익 · 잔여지분)',
+      note: '지배력 상실 시 종속기업의 자산·부채(영업권 포함)와 비지배지분 장부금액을 제거하고, 받은 대가와 잔여지분 공정가치를 인식하며 차이를 당기손익으로 처리합니다. 종속기업과 관련해 OCI에 누적된 금액은 당기손익으로 재분류합니다(처분 시 재분류 대상인 항목, 예: 해외사업장환산차이). 잔여지분은 공정가치로 재측정합니다.',
+      fields: [
+        { k: 'cons', l: '처분대가', d: '6000000' }, { k: 'rfv', l: '잔여지분 공정가치', d: '1500000', opt: true },
+        { k: 'na', l: '종속기업 순자산 (연결상 장부, 영업권 제외, 100%)', d: '9000000' }, { k: 'gw', l: '영업권 장부금액', d: '500000', opt: true },
+        { k: 'nci', l: '비지배지분 장부금액', d: '1800000' }, { k: 'oci', l: '재분류할 누적 OCI (이익 +, 손실 −)', d: '100000', opt: true },
+      ],
+      compute(v) {
+        const rfv = optN(v.rfv, 0), gw = optN(v.gw, 0), oci = optN(v.oci, 0);
+        const gain = v.cons + rfv + oci - (v.na + gw - v.nci);
+        return { rows: [['제거하는 지배기업 귀속 순자산 + 영업권', money(v.na + gw - v.nci)], ['받은 대가 + 잔여지분 공정가치', money(v.cons + rfv)], ['재분류 OCI', gl(oci)], ['지배력 상실 처분손익 (당기손익)', gl(gain), true], ['잔여지분 재측정 이익 (포함액)', rfv > 0 ? '잔여지분 공정가치가 새 장부금액 (' + money(rfv) + ')' : '잔여지분 없음']] };
+      },
+    },
+  ];
+  ATOOLS3.forEach((t) => ATOOLS.push(t));
+  (() => {
+    const i = AGROUPS.findIndex((g) => g[0] === '재무회계');
+    AGROUPS.splice(i + 1, 0, ['외화환산 (K-IFRS 1021)', ['fxm', 'fxn', 'fxs', 'fxh']], ['연결회계 (K-IFRS 1110 · 1103)', ['cons', 'intg', 'step', 'ncieq', 'ctrl']]);
+  })();
+  // ACCT3 END
 
   const labState = { tool: 'dil', atool: 'tvm', vals: {} };
   try { Object.assign(labState, JSON.parse(localStorage.getItem('pf-lab') || '{}')); } catch (e) {}
