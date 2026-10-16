@@ -589,8 +589,10 @@ function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', '�
 
   // ---- 환율·단위 변환
   // 환율은 기준일 값을 내장하고, 가능하면 open.er-api.com에서 최신 값을 불러온다. 직접 수정한 값은 이 브라우저에만 저장한다.
-  const FX = { date: '2026-10-16', src: 'open.er-api.com', rates: { KRW: 1342.74, USD: 1, JPY: 158.087, EUR: 0.89165, CNY: 6.70299, GBP: 0.75405, AUD: 1.44602, CAD: 1.41915, CHF: 0.82829, HKD: 7.84743, SGD: 1.28234, THB: 33.5261, VND: 25856.49, TWD: 32.3603, PHP: 63.0843, INR: 95.1001, AED: 3.6725, BRL: 5.0545 } };
-  const FXN = { KRW: '대한민국 원', USD: '미국 달러', JPY: '일본 엔', EUR: '유로', CNY: '중국 위안', GBP: '영국 파운드', AUD: '호주 달러', CAD: '캐나다 달러', CHF: '스위스 프랑', HKD: '홍콩 달러', SGD: '싱가포르 달러', THB: '태국 바트', VND: '베트남 동', TWD: '대만 달러', PHP: '필리핀 페소', INR: '인도 루피', AED: 'UAE 디르함', BRL: '브라질 헤알' };
+  const FX = { date: '2026-10-16', src: 'open.er-api.com', rates: { KRW: 1342.74, USD: 1.0, JPY: 158.087, EUR: 0.89165, CNY: 6.70299, GBP: 0.75405, AUD: 1.44602, CAD: 1.41915, CHF: 0.82829, HKD: 7.84743, SGD: 1.28234, THB: 33.5261, VND: 25856.5, TWD: 32.3603, PHP: 63.0843, INR: 95.1001, AED: 3.6725, BRL: 5.0545, XPF: 106.403, XDR: 0.738316, GHS: 11.6646, GYD: 209.215, GMD: 74.573, GTQ: 7.64083, GNF: 8799.38, NAD: 16.5235, NGN: 1331.19, SSP: 5982.35, ZAR: 16.5235, ANG: 1.79, NPR: 152.156, NOK: 9.48281, NZD: 1.78076, NIO: 36.8163, DKK: 6.66897, DOP: 61.2476, XCD: 2.7, LAK: 22366.9, LRD: 170.78, RUB: 83.8738, LBP: 89500.0, LSL: 16.5235, RON: 4.75949, RWF: 1477.9, LYD: 6.42427, MGA: 4520.16, MOP: 8.08305, MWK: 1740.58, MYR: 4.08249, MXN: 18.4572, MAD: 9.81548, MUR: 47.5043, MRU: 40.3099, MZN: 63.7363, MDL: 17.9042, MVR: 15.4446, MNT: 3615.76, MMK: 2099.23, VUV: 119.379, BHD: 0.376, BBD: 2.0, BSD: 1.0, BDT: 123.136, BMD: 1.0, VES: 880.116, BYN: 3.01481, BZD: 2.0, BAM: 1.74392, BWP: 13.9068, BOB: 11.7166, BIF: 3000.79, BTN: 95.0978, MKD: 55.0763, BGN: 1.74392, BND: 1.28234, WST: 2.75109, SAR: 3.75, STN: 21.8455, XOF: 584.887, RSD: 104.789, SCR: 14.1246, SHP: 0.754062, SOS: 571.731, SBD: 8.0162, SDG: 511.842, SRD: 37.7838, LKR: 330.98, SEK: 9.9599, SYP: 121.784, SLE: 24.3579, AWG: 1.79, AMD: 361.656, ARS: 1513.93, ISK: 121.592, HTG: 130.944, AZN: 1.70022, AFN: 64.9187, ALL: 81.4534, DZD: 134.566, AOA: 925.436, ERN: 15.0, SZL: 16.5235, ETB: 161.551, YER: 236.123, OMR: 0.384497, HNL: 26.8854, JOD: 0.709, UGX: 3999.6, UYU: 40.1942, UZS: 11967.9, UAH: 44.9305, IQD: 1517.54, IRR: 1734040.0, ILS: 3.1004, EGP: 53.4645, IDR: 17949.1, JMD: 158.71, ZMW: 20.0453, GEL: 2.59718, XAF: 584.887, DJF: 177.721, GIP: 0.754062, ZWG: 26.6094, CZK: 21.7151, CLP: 985.501, XCG: 1.79, CVE: 98.3183, KZT: 452.969, QAR: 3.64, KHR: 4059.94, KES: 129.751, KYD: 0.833333, KMF: 438.665, CRC: 455.441, COP: 3184.57, CDF: 2310.95, CUP: 24.0, KWD: 0.310459, KGS: 87.4862, TJS: 9.22779, TZS: 2632.82, TOP: 2.39035, TMT: 3.50053, TND: 2.99975, TRY: 49.4803, TTD: 6.76963, PAB: 1.0, PYG: 5704.21, PKR: 276.983, PGK: 4.51089, PEN: 3.43525, FKP: 0.754062, PLN: 3.89682, FJD: 2.26241, HUF: 324.418 } };
+  const FXN = { KRW: '대한민국 원', USD: '미국 달러', JPY: '일본 엔', EUR: '유로', CNY: '중국 위안', GBP: '영국 파운드', AUD: '호주 달러', CAD: '캐나다 달러', CHF: '스위스 프랑', HKD: '홍콩 달러', SGD: '싱가포르 달러', THB: '태국 바트', VND: '베트남 동', TWD: '대만 달러', PHP: '필리핀 페소', INR: '인도 루피', AED: 'UAE 디르함', BRL: '브라질 헤알', XPF: 'CFP 프랑', XDR: 'IMF 특별인출권(SDR)', GHS: '가나 세디', GYD: '가이아나 달러', GMD: '감비아 달라시', GTQ: '과테말라 케찰', GNF: '기니 프랑', NAD: '나미비아 달러', NGN: '나이지리아 나이라', SSP: '남수단 파운드', ZAR: '남아프리카공화국 랜드', ANG: '네덜란드령 안틸레스 길더', NPR: '네팔 루피', NOK: '노르웨이 크로네', NZD: '뉴질랜드 달러', NIO: '니카라과 코르도바', DKK: '덴마크 크로네', DOP: '도미니카공화국 페소', XCD: '동카리브 달러', LAK: '라오스 킵', LRD: '라이베리아 달러', RUB: '러시아 루블', LBP: '레바논 파운드', LSL: '레소토 로티', RON: '루마니아 레우', RWF: '르완다 프랑', LYD: '리비아 디나르', MGA: '마다가스카르 아리아리', MOP: '마카오 파타카', MWK: '말라위 콰차', MYR: '말레이시아 링깃', MXN: '멕시코 페소', MAD: '모로코 디르함', MUR: '모리셔스 루피', MRU: '모리타니 우기야', MZN: '모잠비크 메티칼', MDL: '몰도바 레우', MVR: '몰디브 루피야', MNT: '몽골 투그릭', MMK: '미얀마 짯', VUV: '바누아투 바투', BHD: '바레인 디나르', BBD: '바베이도스 달러', BSD: '바하마 달러', BDT: '방글라데시 타카', BMD: '버뮤다 달러', VES: '베네수엘라 볼리바르', BYN: '벨라루스 루블', BZD: '벨리즈 달러', BAM: '보스니아 태환 마르크', BWP: '보츠와나 풀라', BOB: '볼리비아 볼리비아노', BIF: '부룬디 프랑', BTN: '부탄 눌트럼', MKD: '북마케도니아 데나르', BGN: '불가리아 레프', BND: '브루나이 달러', WST: '사모아 탈라', SAR: '사우디아라비아 리얄', STN: '상투메프린시페 도브라', XOF: '서아프리카 CFA 프랑', RSD: '세르비아 디나르', SCR: '세이셸 루피', SHP: '세인트헬레나 파운드', SOS: '소말리아 실링', SBD: '솔로몬제도 달러', SDG: '수단 파운드', SRD: '수리남 달러', LKR: '스리랑카 루피', SEK: '스웨덴 크로나', SYP: '시리아 파운드', SLE: '시에라리온 레온', AWG: '아루바 플로린', AMD: '아르메니아 드람', ARS: '아르헨티나 페소', ISK: '아이슬란드 크로나', HTG: '아이티 구르드', AZN: '아제르바이잔 마나트', AFN: '아프가니스탄 아프가니', ALL: '알바니아 렉', DZD: '알제리 디나르', AOA: '앙골라 콴자', ERN: '에리트레아 낙파', SZL: '에스와티니 릴랑게니', ETB: '에티오피아 비르', YER: '예멘 리알', OMR: '오만 리알', HNL: '온두라스 렘피라', JOD: '요르단 디나르', UGX: '우간다 실링', UYU: '우루과이 페소', UZS: '우즈베키스탄 숨', UAH: '우크라이나 흐리우냐', IQD: '이라크 디나르', IRR: '이란 리알', ILS: '이스라엘 셰켈', EGP: '이집트 파운드', IDR: '인도네시아 루피아', JMD: '자메이카 달러', ZMW: '잠비아 콰차', GEL: '조지아 라리', XAF: '중앙아프리카 CFA 프랑', DJF: '지부티 프랑', GIP: '지브롤터 파운드', ZWG: '짐바브웨 골드', CZK: '체코 코루나', CLP: '칠레 페소', XCG: '카리브 길더', CVE: '카보베르데 에스쿠도', KZT: '카자흐스탄 텡게', QAR: '카타르 리얄', KHR: '캄보디아 리엘', KES: '케냐 실링', KYD: '케이맨 달러', KMF: '코모로 프랑', CRC: '코스타리카 콜론', COP: '콜롬비아 페소', CDF: '콩고민주공화국 프랑', CUP: '쿠바 페소', KWD: '쿠웨이트 디나르', KGS: '키르기스스탄 솜', TJS: '타지키스탄 소모니', TZS: '탄자니아 실링', TOP: '통가 팡가', TMT: '투르크메니스탄 마나트', TND: '튀니지 디나르', TRY: '튀르키예 리라', TTD: '트리니다드토바고 달러', PAB: '파나마 발보아', PYG: '파라과이 과라니', PKR: '파키스탄 루피', PGK: '파푸아뉴기니 키나', PEN: '페루 솔', FKP: '포클랜드 파운드', PLN: '폴란드 즈워티', FJD: '피지 달러', HUF: '헝가리 포린트' };
+  const FX_MAIN = ["KRW", "USD", "JPY", "EUR", "CNY", "GBP", "AUD", "CAD", "CHF", "HKD", "SGD", "THB", "VND", "TWD", "PHP", "INR", "AED", "BRL"];
+  const FX_ALL = ["KRW", "USD", "JPY", "EUR", "CNY", "GBP", "AUD", "CAD", "CHF", "HKD", "SGD", "THB", "VND", "TWD", "PHP", "INR", "AED", "BRL", "XPF", "XDR", "GHS", "GYD", "GMD", "GTQ", "GNF", "NAD", "NGN", "SSP", "ZAR", "ANG", "NPR", "NOK", "NZD", "NIO", "DKK", "DOP", "XCD", "LAK", "LRD", "RUB", "LBP", "LSL", "RON", "RWF", "LYD", "MGA", "MOP", "MWK", "MYR", "MXN", "MAD", "MUR", "MRU", "MZN", "MDL", "MVR", "MNT", "MMK", "VUV", "BHD", "BBD", "BSD", "BDT", "BMD", "VES", "BYN", "BZD", "BAM", "BWP", "BOB", "BIF", "BTN", "MKD", "BGN", "BND", "WST", "SAR", "STN", "XOF", "RSD", "SCR", "SHP", "SOS", "SBD", "SDG", "SRD", "LKR", "SEK", "SYP", "SLE", "AWG", "AMD", "ARS", "ISK", "HTG", "AZN", "AFN", "ALL", "DZD", "AOA", "ERN", "SZL", "ETB", "YER", "OMR", "HNL", "JOD", "UGX", "UYU", "UZS", "UAH", "IQD", "IRR", "ILS", "EGP", "IDR", "JMD", "ZMW", "GEL", "XAF", "DJF", "GIP", "ZWG", "CZK", "CLP", "XCG", "CVE", "KZT", "QAR", "KHR", "KES", "KYD", "KMF", "CRC", "COP", "CDF", "CUP", "KWD", "KGS", "TJS", "TZS", "TOP", "TMT", "TND", "TRY", "TTD", "PAB", "PYG", "PKR", "PGK", "PEN", "FKP", "PLN", "FJD", "HUF"];
   const UNIT_GROUPS = [
     ['일상 · 기본', ['길이', '넓이', '부피', '질량(무게)', '시간', '데이터', '연비']],
     ['물리 · 역학', ['속도', '가속도', '각도', '힘', '토크', '압력', '밀도', '주파수']],
@@ -671,7 +673,8 @@ function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', '�
   const cvEl = {};
   let autoFx = false;
   const isFx = () => state.mode === 'fx';
-  const keysOf = () => (isFx() ? Object.keys(FX.rates) : Object.keys(UNITS[state.cv.cat]));
+  const keysOf = () => (isFx() ? FX_ALL : Object.keys(UNITS[state.cv.cat]));
+  const listKeys = () => (isFx() ? FX_MAIN.concat([state.cv.from, state.cv.to].filter((k, i, a) => !FX_MAIN.includes(k) && a.indexOf(k) === i)) : keysOf());
   const labelOf = (k) => (isFx() ? k + ' · ' + FXN[k] : k);
 
   function convert(v, from, to) {
@@ -700,7 +703,10 @@ function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', '�
     }
   }
   function fillSelect(sel, value) {
-    sel.replaceChildren(...keysOf().map((k) => h('option', { value: k, textContent: labelOf(k) })));
+    if (isFx()) {
+      const og = (label, ks) => h('optgroup', { label }, ...ks.map((k) => h('option', { value: k, textContent: labelOf(k) })));
+      sel.replaceChildren(og('주요 통화', FX_MAIN), og('기타 통화 (가나다순, ' + (FX_ALL.length - FX_MAIN.length) + '개)', FX_ALL.slice(FX_MAIN.length)));
+    } else sel.replaceChildren(...keysOf().map((k) => h('option', { value: k, textContent: labelOf(k) })));
     sel.value = value;
   }
   function updateConv() {
@@ -714,7 +720,7 @@ function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', '�
     const r = convert(v, state.cv.from, state.cv.to);
     cvEl.out.textContent = fmtConv(r) + ' ' + state.cv.to;
     state.cvOut = String(parseFloat(r.toPrecision(12)));
-    cvEl.all.replaceChildren(...keysOf().map((k) => h('div', {}, h('span', { textContent: labelOf(k) }), h('span', { textContent: fmtConv(convert(v, state.cv.from, k)) }))));
+    cvEl.all.replaceChildren(...listKeys().map((k) => h('div', {}, h('span', { textContent: labelOf(k) }), h('span', { textContent: fmtConv(convert(v, state.cv.from, k)) }))));
   }
   function buildConv() {
     ensureSel();
@@ -758,7 +764,7 @@ function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', '�
       live.addEventListener('click', async () => { live.disabled = true; live.textContent = '불러오는 중…'; await loadFxLive(); if (isFx()) { buildConv(); render(); } });
       const grid = h('div', { className: 'cv-rates' });
       const saved = fxRates();
-      Object.keys(FX.rates).filter((k) => k !== 'USD').forEach((k) => {
+      FX_MAIN.filter((k) => k !== 'USD').forEach((k) => {
         const inp = h('input', { type: 'number', step: 'any', min: '0', value: String(saved[k]), id: 'fx-' + k });
         inp.addEventListener('input', () => {
           const n = parseFloat(inp.value);
