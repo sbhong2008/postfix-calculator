@@ -600,7 +600,8 @@ function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', '�
   try { fxLive = JSON.parse(localStorage.getItem('pf-fxlive') || 'null'); } catch (e) { fxLive = null; }
   const fxRates = () => Object.assign({}, FX.rates, fxLive && fxLive.rates ? fxLive.rates : {}, fxSaved);
   let fxStatus = '';
-  const kst = (ms) => { if (!ms) return FX.date; const d = new Date(ms + 9 * 3600 * 1000); return (d.getUTCMonth() + 1) + '/' + d.getUTCDate() + ' ' + String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0'); };
+  const tzName = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) { return ''; } };
+  const kst = (ms) => { if (!ms) return FX.date; const d = new Date(ms); return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
   async function loadFxLive() {
     try {
       const ctl = new AbortController();
@@ -700,7 +701,7 @@ function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', '�
     parts.push(h('div', { className: 'cv-row' }, amount, from), swap, h('div', { className: 'cv-row' }, cvEl.out, to), cvEl.all);
     if (isFx()) {
       const note = h('p', { className: 'cv-note' });
-      note.textContent = (fxLive ? '공급처 갱신 ' + kst(fxLive.upd) + ' (한국시간, open.er-api.com) · 조회 ' + kst(fxLive.at) + ' (한국시간). 공급처는 하루 1회, 한국시간 오전 9시 전후에 갱신합니다.' : '기준일 ' + FX.date + ' (내장 스냅샷)') + ' 참고값입니다. 이 환율은 하루 1회 갱신되는 시장 중간값이라 은행·환전소의 적용 환율(매매기준율, 스프레드)과 다릅니다. 필요하면 아래에서 직접 수정하세요.';
+      note.textContent = (fxLive ? '공급처 갱신 ' + kst(fxLive.upd) + ' · 조회 ' + kst(fxLive.at) + ' (이 기기의 현지시간' + (tzName() ? ', ' + tzName() : '') + ', open.er-api.com). 공급처는 하루 1회, 협정세계시(UTC) 0시 전후에 갱신합니다.' : '기준일 ' + FX.date + ' (내장 스냅샷)') + ' 참고값입니다. 이 환율은 하루 1회 갱신되는 시장 중간값이라 은행·환전소의 적용 환율(매매기준율, 스프레드)과 다릅니다. 필요하면 아래에서 직접 수정하세요.';
       const live = h('button', { type: 'button', className: 'pill', textContent: '최신 환율 불러오기' });
       const stat = h('p', { className: 'cv-note', textContent: fxStatus });
       stat.setAttribute('aria-live', 'polite');
