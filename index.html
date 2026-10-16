@@ -2030,6 +2030,947 @@ function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', '�
     ['재무제표 · 세금', ['ratio', 'jrn', 'vat', 'ctax']],
   ];
   // ACCT END
+  // ACCT2 START
+  const ncdf = (x) => 0.5 * (1 + (x >= 0 ? 1 : -1) * gammaP(0.5, (x * x) / 2));
+  const npdf = (x) => Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI);
+  const binCdf = (k, n, p) => (k >= n ? 1 : k < 0 ? 0 : 1 - betai(k + 1, n - k, p));
+  const lines = (s) => String(s).split(/\n/).map((x) => x.trim()).filter(Boolean);
+  const fav = (x) => (Math.abs(x) < 1e-9 ? '0' : money(Math.abs(x)) + (x < 0 ? ' (유리)' : ' (불리)'));
+  const pctIn = (x) => x / 100;
+  const optN = (x, d) => (x === null || x === undefined ? d : x);
+  const ATOOLS2 = [
+    // ---------- 재무관리 ----------
+    {
+      id: 'port', name: '포트폴리오 (2자산 · 최소분산 · 접점)',
+      note: '두 위험자산의 기대수익률·표준편차·상관계수로 포트폴리오의 위험과 수익을 계산합니다. 무위험이자율을 넣으면 샤프비율이 최대인 접점포트폴리오(자본시장선 위)도 구합니다. 가중치에는 공매도(음수)도 허용됩니다.',
+      fields: [
+        { k: 'r1', l: '자산 1 기대수익률 (%)', d: '10' }, { k: 's1', l: '자산 1 표준편차 (%)', d: '20' },
+        { k: 'r2', l: '자산 2 기대수익률 (%)', d: '6' }, { k: 's2', l: '자산 2 표준편차 (%)', d: '10' },
+        { k: 'rho', l: '상관계수 ρ', d: '0.3' }, { k: 'w1', l: '자산 1 투자비중 (%)', d: '40' },
+        { k: 'rf', l: '무위험이자율 (%, 선택)', d: '3', opt: true },
+      ],
+      compute(v) {
+        if (v.rho < -1 || v.rho > 1 || v.s1 < 0 || v.s2 < 0) throw new Error('상관계수와 표준편차를 확인하세요');
+        const cov = v.rho * v.s1 * v.s2;
+        const pt = (w) => ({ r: w * v.r1 + (1 - w) * v.r2, s: Math.sqrt(Math.max(0, w * w * v.s1 * v.s1 + (1 - w) ** 2 * v.s2 * v.s2 + 2 * w * (1 - w) * cov)) });
+        const w = v.w1 / 100, p = pt(w);
+        const den = v.s1 * v.s1 + v.s2 * v.s2 - 2 * cov;
+        const wm = den === 0 ? NaN : (v.s2 * v.s2 - cov) / den, pm = pt(wm);
+        const rows = [['포트폴리오 기대수익률', p.r.toFixed(3) + ' %', true], ['포트폴리오 표준편차', p.s.toFixed(3) + ' %', true], ['분산투자 효과 (가중평균 σ − σp)', (w * v.s1 + (1 - w) * v.s2 - p.s).toFixed(3) + ' %p']];
+        if (Number.isFinite(wm)) rows.push(['최소분산 자산 1 비중', pct(wm)], ['최소분산 기대수익률 · σ', pm.r.toFixed(3) + ' % · ' + pm.s.toFixed(3) + ' %']);
+        if (v.rf !== null) {
+          const e1 = v.r1 - v.rf, e2 = v.r2 - v.rf, dn = e1 * v.s2 * v.s2 + e2 * v.s1 * v.s1 - (e1 + e2) * cov;
+          if (dn !== 0) { const wt = (e1 * v.s2 * v.s2 - e2 * cov) / dn, pt2 = pt(wt); rows.push(['접점포트폴리오 자산 1 비중', pct(wt), true], ['접점 기대수익률 · σ', pt2.r.toFixed(3) + ' % · ' + pt2.s.toFixed(3) + ' %'], ['최대 샤프비율', ((pt2.r - v.rf) / pt2.s).toFixed(4)]);
+            rows.push(['현재 포트폴리오 샤프비율', p.s > 0 ? ((p.r - v.rf) / p.s).toFixed(4) : '—']); }
+        }
+        return { rows };
+      },
+    },
+    {
+      id: 'perf', name: '증권시장선 · 성과평가 (샤프 · 트레이너 · 젠센)',
+      note: 'CAPM 기대수익률 E(R) = Rf + β(Rm − Rf). 젠센 알파 = 실현수익률 − E(R). 샤프 = (Rp − Rf)/σp(총위험), 트레이너 = (Rp − Rf)/β(체계적 위험). 미래 기대수익률이 아니라 실현수익률을 넣으면 사후 성과평가가 됩니다.',
+      fields: [
+        { k: 'rf', l: '무위험이자율 (%)', d: '3' }, { k: 'rm', l: '시장수익률 (%)', d: '9' },
+        { k: 'b', l: '베타 β', d: '1.2' }, { k: 'rp', l: '포트폴리오 수익률 (%)', d: '11' },
+        { k: 'sp', l: '포트폴리오 표준편차 (%, 선택)', d: '15', opt: true },
+        { k: 'sm', l: '시장 표준편차 (%, 선택)', d: '12', opt: true },
+      ],
+      compute(v) {
+        const er = v.rf + v.b * (v.rm - v.rf);
+        const rows = [['CAPM 기대수익률', er.toFixed(3) + ' %', true], ['젠센 알파', (v.rp - er).toFixed(3) + ' %p', true], ['판단', v.rp > er + 1e-9 ? '증권시장선 위 (과소평가/우수)' : v.rp < er - 1e-9 ? '증권시장선 아래 (과대평가/부진)' : '증권시장선 위']];
+        if (v.b !== 0) rows.push(['트레이너 지수', ((v.rp - v.rf) / v.b).toFixed(4)]);
+        if (v.sp !== null && v.sp > 0) rows.push(['샤프 지수', ((v.rp - v.rf) / v.sp).toFixed(4)]);
+        if (v.sp !== null && v.sm !== null && v.sm > 0) { rows.push(['시장 샤프 지수', ((v.rm - v.rf) / v.sm).toFixed(4)]); rows.push(['M² (위험조정수익률)', (v.rf + ((v.rp - v.rf) / v.sp) * v.sm).toFixed(3) + ' %']); }
+        return { rows };
+      },
+    },
+    {
+      id: 'bs', name: '옵션 가격 (블랙-숄즈 · 그릭스)',
+      note: '유러피안 옵션 가격입니다. 배당수익률(q)을 넣으면 배당 있는 주식(머튼 모형)을 계산합니다. 델타·감마는 가격 변화, 베가는 변동성 1%p당, 로는 이자율 1%p당, 세타는 하루당 변화입니다. 이자율과 변동성은 연속복리, 연 단위입니다.',
+      fields: [
+        { k: 's', l: '기초자산 가격 S', d: '100' }, { k: 'k', l: '행사가격 K', d: '100' },
+        { k: 't', l: '잔존만기 T (년)', d: '1' }, { k: 'r', l: '무위험이자율 (연속, %)', d: '5' },
+        { k: 'sg', l: '변동성 σ (%)', d: '20' }, { k: 'q', l: '배당수익률 q (%)', d: '0', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['s', 'k', 't', 'sg']);
+        const r = v.r / 100, q = optN(v.q, 0) / 100, sg = v.sg / 100, T = v.t;
+        const sq = sg * Math.sqrt(T), d1 = (Math.log(v.s / v.k) + (r - q + (sg * sg) / 2) * T) / sq, d2 = d1 - sq;
+        const dq = Math.exp(-q * T), dr = Math.exp(-r * T);
+        const call = v.s * dq * ncdf(d1) - v.k * dr * ncdf(d2), put = v.k * dr * ncdf(-d2) - v.s * dq * ncdf(-d1);
+        const th = (x) => -(v.s * dq * npdf(d1) * sg) / (2 * Math.sqrt(T));
+        return { rows: [['콜옵션 가격', money(call, 4), true], ['풋옵션 가격', money(put, 4), true], ['d₁ · d₂', d1.toFixed(4) + ' · ' + d2.toFixed(4)], ['콜 델타 · 풋 델타', (dq * ncdf(d1)).toFixed(4) + ' · ' + (dq * (ncdf(d1) - 1)).toFixed(4)], ['감마', ((dq * npdf(d1)) / (v.s * sq)).toFixed(5)], ['베가 (1%p당)', ((v.s * dq * npdf(d1) * Math.sqrt(T)) / 100).toFixed(4)], ['콜 세타 (일)', ((th() - r * v.k * dr * ncdf(d2) + q * v.s * dq * ncdf(d1)) / 365).toFixed(4)], ['콜 로 · 풋 로 (1%p당)', ((v.k * T * dr * ncdf(d2)) / 100).toFixed(4) + ' · ' + ((-v.k * T * dr * ncdf(-d2)) / 100).toFixed(4)], ['풋-콜 패리티 (C − P − (Sₑ − PV(K)))', money(call - put - (v.s * dq - v.k * dr), 8)]] };
+      },
+    },
+    {
+      id: 'binom', name: '이항모형 옵션 (CRR · 미국형)',
+      note: 'Cox-Ross-Rubinstein 이항나무입니다. u = e^(σ√Δt), d = 1/u, 위험중립확률 p = (e^((r−q)Δt) − d)/(u − d). 미국형은 매 노드에서 조기행사 가치와 비교합니다. 단계 수가 많을수록 블랙-숄즈에 수렴합니다(최대 500).',
+      fields: [
+        { k: 's', l: '기초자산 가격 S', d: '100' }, { k: 'k', l: '행사가격 K', d: '100' },
+        { k: 't', l: '잔존만기 T (년)', d: '1' }, { k: 'r', l: '무위험이자율 (연속, %)', d: '5' },
+        { k: 'sg', l: '변동성 σ (%)', d: '20' }, { k: 'q', l: '배당수익률 (%)', d: '0', opt: true },
+        { k: 'n', l: '단계 수', d: '100' },
+        { k: 'type', l: '옵션 종류', t: 'sel', d: 'put', opts: [['call', '콜'], ['put', '풋']] },
+        { k: 'style', l: '행사 방식', t: 'sel', d: 'am', opts: [['eu', '유러피안'], ['am', '미국형']] },
+      ],
+      compute(v) {
+        positive(v, ['s', 'k', 't', 'sg']);
+        const n = Math.round(v.n);
+        if (n < 1 || n > 500) throw new Error('단계 수는 1~500 사이로 입력하세요');
+        const r = v.r / 100, q = optN(v.q, 0) / 100, sg = v.sg / 100, dt = v.t / n;
+        const u = Math.exp(sg * Math.sqrt(dt)), d = 1 / u, p = (Math.exp((r - q) * dt) - d) / (u - d), disc = Math.exp(-r * dt);
+        if (!(p > 0 && p < 1)) throw new Error('위험중립확률이 0~1을 벗어납니다. 단계 수나 변동성을 조정하세요');
+        const pay = (S) => (v.type === 'call' ? Math.max(S - v.k, 0) : Math.max(v.k - S, 0));
+        let val = [];
+        for (let j = 0; j <= n; j++) val.push(pay(v.s * u ** (n - j) * d ** j));
+        let v1 = null;
+        for (let i = n - 1; i >= 0; i--) {
+          const nv = [];
+          for (let j = 0; j <= i; j++) {
+            let x = disc * (p * val[j] + (1 - p) * val[j + 1]);
+            if (v.style === 'am') x = Math.max(x, pay(v.s * u ** (i - j) * d ** j));
+            nv.push(x);
+          }
+          if (i === 1) v1 = nv.slice();
+          val = nv;
+        }
+        const rows = [['옵션 가격', money(val[0], 4), true], ['u · d', u.toFixed(5) + ' · ' + d.toFixed(5)], ['위험중립확률 p', p.toFixed(5)]];
+        if (v1) rows.push(['델타 (첫 단계)', ((v1[0] - v1[1]) / (v.s * u - v.s * d)).toFixed(4)]);
+        return { rows };
+      },
+    },
+    {
+      id: 'fwd', name: '선물 · 선도 이론가격 (보유비용모형)',
+      note: 'F = S × e^((r − q + u)T) (연속복리). 이산복리는 F = S × (1+r)^T ÷ (1+q−u)^T 로 계산합니다. q는 배당·편의수익률, u는 저장비용률입니다. 시장 선물가격을 넣으면 현물-선물 차익거래 방향을 판단합니다(거래비용 무시).',
+      fields: [
+        { k: 's', l: '현물가격 S', d: '100' }, { k: 'r', l: '무위험이자율 (%)', d: '4' },
+        { k: 't', l: '만기 T (년)', d: '0.5' }, { k: 'q', l: '배당·편의수익률 q (%)', d: '2', opt: true },
+        { k: 'u', l: '저장비용률 u (%)', d: '0', opt: true },
+        { k: 'mode', l: '복리 방식', t: 'sel', d: 'c', opts: [['c', '연속복리'], ['d', '이산복리 (연 1회)']] },
+        { k: 'fm', l: '시장 선물가격 (선택)', d: '', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['s', 't']);
+        const r = v.r / 100, q = optN(v.q, 0) / 100, u = optN(v.u, 0) / 100;
+        const F = v.mode === 'c' ? v.s * Math.exp((r - q + u) * v.t) : (v.s * (1 + r) ** v.t) / ((1 + q - u) ** v.t);
+        const rows = [['이론 선물가격 F', money(F, 4), true], ['베이시스 (F − S)', money(F - v.s, 4)], ['보유비용 (연 환산)', v.mode === 'c' ? pct(r - q + u) : pct((1 + r) / (1 + q - u) - 1)]];
+        if (v.fm !== null) {
+          const g = v.fm - F;
+          rows.push(['시장가 − 이론가', money(g, 4)], ['차익거래', Math.abs(g) < 1e-6 ? '없음' : g > 0 ? '선물 고평가: 현물 매수 + 선물 매도 (현물매입 전략)' : '선물 저평가: 현물 공매도 + 선물 매수 (역현물매입 전략)', true]);
+        }
+        return { rows };
+      },
+    },
+    {
+      id: 'ddm', name: '배당할인모형 (고든 · 2단계 성장)',
+      note: '초기 N년 동안 g₁로 성장하고 이후 영구히 g₂로 성장합니다(N = 0이면 고든 모형). P₀ = Σ D₀(1+g₁)ᵗ/(1+k)ᵗ + D_N(1+g₂)/(k−g₂)/(1+k)ᴺ. EPS를 넣으면 성장기회의 현재가치(PVGO)를 구합니다.',
+      fields: [
+        { k: 'd0', l: '직전 배당 D₀', d: '1000' }, { k: 'k', l: '요구수익률 k (%)', d: '10' },
+        { k: 'g1', l: '초기 성장률 g₁ (%)', d: '15' }, { k: 'n', l: '초기 성장 기간 N (년)', d: '3' },
+        { k: 'g2', l: '영구 성장률 g₂ (%)', d: '4' }, { k: 'eps', l: '주당순이익 EPS (선택)', d: '', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['d0', 'k']);
+        const k = v.k / 100, g1 = v.g1 / 100, g2 = v.g2 / 100, n = Math.round(v.n);
+        if (n < 0 || n > 200) throw new Error('N은 0~200 사이로 입력하세요');
+        if (k <= g2) throw new Error('영구 성장률은 요구수익률보다 낮아야 합니다');
+        let pv = 0, dn = v.d0;
+        for (let t = 1; t <= n; t++) { dn *= 1 + g1; pv += dn / (1 + k) ** t; }
+        const tv = (dn * (1 + g2)) / (k - g2), pvTv = tv / (1 + k) ** n, P = pv + pvTv;
+        const rows = [['주가 P₀', money(P), true], ['초기 성장기 배당의 현재가치', money(pv)], ['영구가치(터미널)의 현재가치', money(pvTv)], ['영구가치 비중', pct(pvTv / P)], ['예상 배당수익률 (D₁/P₀)', pct(v.d0 * (1 + (n > 0 ? g1 : g2)) / P)]];
+        if (v.eps !== null) { positive(v, ['eps']); rows.push(['성장 없는 가치 (EPS/k)', money(v.eps / k)], ['성장기회의 현재가치 PVGO', money(P - v.eps / k), true], ['PER (P₀/EPS)', ratioX(P / v.eps)]); }
+        return { rows };
+      },
+    },
+    {
+      id: 'mm', name: '자본구조 (MM 명제 · 법인세 효과)',
+      note: '영업이익(EBIT)이 영구히 일정하다고 보는 MM 모형입니다. 무부채기업가치 V_U = EBIT(1−t)/ku, 부채기업가치 V_L = V_U + t·D. 자기자본비용 ke = ku + (ku − kd)(1−t)D/E. 부채는 위험이 없어 kd = 무위험이자율이라고 가정하면 아래 식이 성립합니다.',
+      fields: [
+        { k: 'ebit', l: '영업이익 EBIT', d: '1000' }, { k: 'ku', l: '무부채 자기자본비용 ku (%)', d: '10' },
+        { k: 'kd', l: '부채비용 kd (%)', d: '5' }, { k: 't', l: '법인세율 (%)', d: '25' }, { k: 'd', l: '부채 D', d: '3000' },
+      ],
+      compute(v) {
+        positive(v, ['ebit', 'ku']);
+        if (v.t < 0 || v.t >= 100 || v.d < 0) throw new Error('세율 또는 부채를 확인하세요');
+        const t = v.t / 100, ku = v.ku / 100, kd = v.kd / 100, vu = (v.ebit * (1 - t)) / ku, vl = vu + t * v.d, e = vl - v.d;
+        if (!(e > 0)) throw new Error('자기자본가치가 0 이하입니다. 부채를 줄이세요');
+        const ke = ku + (ku - kd) * (1 - t) * (v.d / e), wacc = (e / vl) * ke + (v.d / vl) * kd * (1 - t);
+        return { rows: [['무부채기업가치 V_U', money(vu), true], ['부채기업가치 V_L', money(vl), true], ['부채의 법인세 절감효과 (t·D)', money(t * v.d)], ['자기자본가치 E', money(e)], ['자기자본비용 ke', pct(ke)], ['WACC', pct(wacc)], ['부채비율 D/E', pct(v.d / e)], ['검산: EBIT(1−t)/WACC', money((v.ebit * (1 - t)) / wacc)]] };
+      },
+    },
+    {
+      id: 'lev', name: '레버리지 (DOL · DFL · DCL)',
+      note: 'DOL = 공헌이익 ÷ 영업이익, DFL = 영업이익 ÷ (영업이익 − 이자비용), DCL = DOL × DFL. 매출 변화율을 넣으면 영업이익과 주당순이익의 변화율을 추정합니다. 우선주배당이 있으면 DFL이 더 커집니다(여기서는 반영하지 않음).',
+      fields: [
+        { k: 'rev', l: '매출액', d: '10000' }, { k: 'vc', l: '변동비 총액', d: '6000' },
+        { k: 'fc', l: '고정비 총액 (이자 제외)', d: '2000' }, { k: 'int', l: '이자비용', d: '500' },
+        { k: 'g', l: '매출 변화율 (%, 선택)', d: '10', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['rev']);
+        const cm = v.rev - v.vc, oi = cm - v.fc, ebt = oi - v.int;
+        if (!(oi > 0)) throw new Error('영업이익이 0 이하이면 DOL을 정의할 수 없습니다');
+        if (!(ebt > 0)) throw new Error('세전이익이 0 이하이면 DFL을 정의할 수 없습니다');
+        const dol = cm / oi, dfl = oi / ebt;
+        const rows = [['공헌이익', money(cm)], ['영업이익', money(oi)], ['DOL', dol.toFixed(3), true], ['DFL', dfl.toFixed(3), true], ['DCL', (dol * dfl).toFixed(3), true]];
+        if (v.g !== null) rows.push(['영업이익 변화율', (dol * v.g).toFixed(2) + ' %'], ['주당순이익 변화율', (dol * dfl * v.g).toFixed(2) + ' %']);
+        return { rows };
+      },
+    },
+    {
+      id: 'fwdrate', name: '이자율 기간구조 (선도이자율 · 할인계수)',
+      note: '1년, 2년, … 만기 현물이자율(spot, 연복리 %)을 순서대로 쉼표로 입력합니다. 선도이자율 f(t−1,t) = (1+sₜ)ᵗ/(1+sₜ₋₁)ᵗ⁻¹ − 1, 할인계수 DFₜ = 1/(1+sₜ)ᵗ. 액면이자율 평가수익률(par yield)은 (1 − DFₙ)/ΣDF 입니다.',
+      fields: [{ k: 'sp', l: '현물이자율 목록 (%)', t: 'area', d: '3.0, 3.5, 4.0, 4.2, 4.3' }],
+      compute(v) {
+        const s = parseList(v.sp, '현물이자율').map((x) => x / 100);
+        if (s.length < 1 || s.length > 40 || s.some((x) => x <= -1)) throw new Error('현물이자율 1~40개를 입력하세요');
+        const rows = []; let sdf = 0;
+        s.forEach((x, i) => {
+          const t = i + 1, df = 1 / (1 + x) ** t; sdf += df;
+          const f = t === 1 ? x : (1 + x) ** t / (1 + s[i - 1]) ** (t - 1) - 1;
+          rows.push([`${t}년`, `현물 ${pct(x)} · 선도 ${pct(f)} · DF ${df.toFixed(5)}`]);
+        });
+        const n = s.length, dfn = 1 / (1 + s[n - 1]) ** n;
+        return { rows: [['액면이자율 평가수익률 (par yield, 만기 ' + n + '년)', pct((1 - dfn) / sdf, 4), true], ...rows] };
+      },
+    },
+    {
+      id: 'irp', name: '환율 · 이자율평가 (IRP · 선물환)',
+      note: '이자율평가: F = S × ((1 + r국내)/(1 + r외국))ᵀ (연복리). S는 외화 1단위당 자국통화 가격입니다. 시장 선물환율을 넣으면 거래비용을 무시한 차익거래 방향을 판단합니다. 구매력평가(PPP): 기대 환율 변화율 ≈ 국내 인플레이션 − 해외 인플레이션.',
+      fields: [
+        { k: 's', l: '현물환율 S (원/외화)', d: '1350' }, { k: 'rd', l: '국내 이자율 (연 %)', d: '3.5' },
+        { k: 'rf', l: '해외 이자율 (연 %)', d: '5.0' }, { k: 't', l: '기간 (년)', d: '1' },
+        { k: 'fm', l: '시장 선물환율 (선택)', d: '', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['s', 't']);
+        const F = v.s * ((1 + v.rd / 100) / (1 + v.rf / 100)) ** v.t;
+        const rows = [['이론 선물환율', money(F, 3), true], ['선물환 할증(할인)율 (연)', pct(((F / v.s) ** (1 / v.t)) - 1)], ['외화 상태', F > v.s ? '선물환 할증 (외화 강세 예상)' : F < v.s ? '선물환 할인 (국내 금리가 더 낮음)' : '동일']];
+        if (v.fm !== null) {
+          const g = v.fm - F;
+          rows.push(['시장 − 이론', money(g, 3)], ['차익거래', Math.abs(g) < 1e-6 ? '없음' : g > 0 ? '선물환 고평가: 외화 차입·현물 매수·선물환 매도' : '선물환 저평가: 자국통화 차입·현물 매도·선물환 매수', true]);
+        }
+        return { rows };
+      },
+    },
+    {
+      id: 'rights', name: '권리락 · 신주인수권 가치',
+      note: '유상증자 후 이론 주가(권리락 주가) = (기존 주식수 × 주가 + 신주수 × 발행가) ÷ (기존 + 신주 주식수). 권리 가치는 권리락 전후 주가 차이입니다. 증자 발표에 따른 주가 반응과 증자 목적(정보효과)은 반영하지 않습니다.',
+      fields: [
+        { k: 'p', l: '권리락 전 주가', d: '10000' }, { k: 'n', l: '기존 발행주식수', d: '1000000' },
+        { k: 'm', l: '신주 발행주식수', d: '200000' }, { k: 'k', l: '신주 발행가', d: '8000' },
+      ],
+      compute(v) {
+        positive(v, ['p', 'n', 'm', 'k']);
+        const px = (v.n * v.p + v.m * v.k) / (v.n + v.m);
+        return { rows: [['권리락 후 이론 주가', money(px), true], ['구주 1주당 권리 가치', money(v.p - px), true], ['신주 1주를 사는 권리 가치', money(px - v.k)], ['배정비율 (구주 1주당 신주)', (v.m / v.n).toFixed(4) + ' 주'], ['증자 조달금액', money(v.m * v.k)], ['증자 후 시가총액', money(px * (v.n + v.m))]] };
+      },
+    },
+    {
+      id: 'ccc', name: '운전자본 (현금전환주기 · 신용조건 비용)',
+      note: '현금전환주기 = 재고보유기간 + 매출채권회수기간 − 매입채무지급기간. 신용조건 d/D, net N(예: 2/10, net 30)의 할인 포기 비용은 연 환산 d/(1−d) × 365/(N − D) 입니다(단리 근사, 복리 환산도 표시).',
+      fields: [
+        { k: 'dio', l: '재고보유기간 (일)', d: '60' }, { k: 'dso', l: '매출채권회수기간 (일)', d: '45' }, { k: 'dpo', l: '매입채무지급기간 (일)', d: '30' },
+        { k: 'd', l: '현금할인율 d (%)', d: '2' }, { k: 'dd', l: '할인기간 D (일)', d: '10' }, { k: 'nn', l: '신용기간 N (일)', d: '30' },
+      ],
+      compute(v) {
+        const rows = [['영업주기 (DIO + DSO)', (v.dio + v.dso).toFixed(1) + ' 일'], ['현금전환주기', (v.dio + v.dso - v.dpo).toFixed(1) + ' 일', true]];
+        if (v.nn > v.dd && v.d > 0 && v.d < 100) {
+          const c = v.d / 100 / (1 - v.d / 100);
+          rows.push(['할인 포기 비용 (단리, 연)', pct(c * (365 / (v.nn - v.dd))), true], ['할인 포기 비용 (복리, 연)', pct((1 + c) ** (365 / (v.nn - v.dd)) - 1)]);
+        } else rows.push(['신용조건', 'N이 D보다 크고 할인율이 0~100% 사이여야 합니다']);
+        return { rows };
+      },
+    },
+    {
+      id: 'eoq', name: '재고관리 (EOQ · 재주문점)',
+      note: 'EOQ = √(2DS/H), D = 연간 수요, S = 1회 주문비, H = 단위당 연간 재고유지비. 총비용 = 주문비 + 유지비(평균재고 Q/2 기준)이며, 구입원가는 제외합니다. 재주문점 = 일평균 수요 × 리드타임 + 안전재고.',
+      fields: [
+        { k: 'dm', l: '연간 수요량 D', d: '12000' }, { k: 's', l: '1회 주문비 S', d: '50' }, { k: 'h', l: '단위당 연간 유지비 H', d: '2' },
+        { k: 'lt', l: '리드타임 (일)', d: '10', opt: true }, { k: 'ss', l: '안전재고 (선택)', d: '200', opt: true }, { k: 'days', l: '연 영업일수', d: '365', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['dm', 's', 'h']);
+        const q = Math.sqrt((2 * v.dm * v.s) / v.h), days = optN(v.days, 365);
+        const rows = [['경제적 주문량 EOQ', sig(q, 6), true], ['연간 주문 횟수', sig(v.dm / q, 5)], ['주문 주기', sig((q / v.dm) * days, 4) + ' 일'], ['연간 주문비', money((v.dm / q) * v.s)], ['연간 유지비', money((q / 2) * v.h)], ['연간 총 재고비용', money(Math.sqrt(2 * v.dm * v.s * v.h)), true]];
+        if (v.lt !== null) rows.push(['재주문점', sig((v.dm / days) * v.lt + optN(v.ss, 0), 6), true]);
+        return { rows };
+      },
+    },
+    // ---------- 재무회계 ----------
+    {
+      id: 'lease', name: '리스 (이용자: 리스부채 · 사용권자산 · 상각표)',
+      note: 'K-IFRS 1116 이용자 모형입니다. 리스부채 = 리스료의 현재가치(내재이자율 또는 증분차입이자율), 사용권자산 = 리스부채 + 개시직접원가 + 개시일 이전 지급 리스료. 이자비용은 기초 리스부채 × 이자율입니다. 연 단위 고정 리스료만 다루며 변동리스료, 연장선택권, 잔존가치보증은 반영하지 않습니다.',
+      fields: [
+        { k: 'pmt', l: '매 기간 리스료', d: '10000' }, { k: 'n', l: '리스기간 (년)', d: '5' },
+        { k: 'r', l: '할인율 (연 %)', d: '6' }, { k: 'tm', l: '지급 시기', t: 'sel', d: '0', opts: [['0', '기말'], ['1', '기초']] },
+        { k: 'idc', l: '개시직접원가', d: '500', opt: true }, { k: 'life', l: '사용권자산 상각기간 (년)', d: '', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['pmt', 'n']);
+        const n = Math.round(v.n);
+        if (n < 1 || n > 60 || Math.abs(v.n - n) > 1e-9) throw new Error('리스기간은 1~60 사이의 정수 년으로 입력하세요');
+        const r = v.r / 100, t = +v.tm;
+        if (r <= -1) throw new Error('할인율을 확인하세요');
+        let liab = 0;
+        for (let i = 1; i <= n; i++) liab += v.pmt / (1 + r) ** (i - t);
+        const rou = liab + optN(v.idc, 0);
+        const life = v.life === null ? n : v.life;
+        const rows = [[t === 1 ? '리스부채 (개시일, 첫 리스료 지급 후)' : '리스부채 (개시일)', money(liab - (t === 1 ? v.pmt : 0)), true], ['사용권자산 (개시일)', money(rou), true], ['연 사용권자산 상각비 (정액)', money(rou / life)], ['총 리스료', money(v.pmt * n)], ['총 이자비용', money(v.pmt * n - liab)]];
+        let bal = liab;
+        for (let i = 1; i <= n; i++) {
+          let intr, pay = v.pmt;
+          if (t === 1) { bal -= pay; intr = bal * r; bal += intr; } else { intr = bal * r; bal += intr - pay; }
+          rows.push([`${i}년차`, `이자 ${money(intr)} · 지급 ${money(pay)} · 기말 부채 ${money(Math.max(bal, 0))} · 사용권자산 상각 ${money(rou / life)}`]);
+        }
+        return { rows, notes: t === 1 ? ['기초 지급이면 첫 리스료는 개시일에 지급되어 부채에서 먼저 빠지고, 사용권자산에는 그 선급분이 포함됩니다(사용권자산 = 전체 리스료 현재가치 + 개시직접원가).'] : [] };
+      },
+    },
+    {
+      id: 'pvu', name: '충당부채 · 복구비용 (현재가치와 이자비용 전입)',
+      note: '미래 지출액의 현재가치로 충당부채를 인식하고(복구충당부채는 자산 취득원가에 가산), 매기 이자비용(유효이자율법)으로 전입합니다. 이자율은 세전 현행 시장 이자율입니다. 최초 인식 후 추정 변경(할인율, 금액)은 반영하지 않습니다.',
+      fields: [
+        { k: 'fv', l: '미래 지출 예상액', d: '1000000' }, { k: 'n', l: '지출까지 기간 (년)', d: '5' }, { k: 'r', l: '할인율 (연 %)', d: '5' },
+      ],
+      compute(v) {
+        positive(v, ['fv', 'n']);
+        const n = Math.round(v.n);
+        if (n < 1 || n > 60 || Math.abs(v.n - n) > 1e-9) throw new Error('기간은 1~60 사이의 정수 년으로 입력하세요');
+        const r = v.r / 100, pv = v.fv / (1 + r) ** n;
+        const rows = [['최초 인식액 (현재가치)', money(pv), true], ['총 이자비용(전입액)', money(v.fv - pv)]];
+        let bal = pv;
+        for (let i = 1; i <= n; i++) { const ie = bal * r; bal += ie; rows.push([`${i}년차`, `이자비용 ${money(ie)} · 기말 충당부채 ${money(bal)}`]); }
+        return { rows };
+      },
+    },
+    {
+      id: 'dtax', name: '법인세회계 (당기법인세 · 이연법인세 · 법인세비용)',
+      note: '과세소득 = 회계이익 + 영구적차이 + 당기 일시적차이 조정(손금불산입은 +, 익금불산입은 −). 이연법인세자산 = 기말 차감할 일시적차이 × 미래 예상세율, 부채 = 가산할 일시적차이 × 미래세율입니다. 법인세비용 = 당기법인세 + 이연법인세부채 증가 − 이연법인세자산 증가. 실현가능성 판단(DTA 인식 한도)은 반영하지 않습니다.',
+      fields: [
+        { k: 'ebt', l: '법인세비용차감전순이익', d: '1000000' }, { k: 'perm', l: '영구적차이 조정 (순가산+/순차감−)', d: '50000' },
+        { k: 'tdiff', l: '당기 일시적차이 조정 (순)', d: '100000' },
+        { k: 'cded', l: '기말 차감할 일시적차이 잔액', d: '300000' }, { k: 'ctax', l: '기말 가산할 일시적차이 잔액', d: '0' },
+        { k: 'rc', l: '당기 세율 (%)', d: '20' }, { k: 'rf', l: '미래 예상세율 (%)', d: '20' },
+        { k: 'bda', l: '기초 이연법인세자산', d: '40000' }, { k: 'bdl', l: '기초 이연법인세부채', d: '0' },
+      ],
+      compute(v) {
+        const ti = v.ebt + v.perm + v.tdiff, cur = Math.max(0, ti) * (v.rc / 100);
+        const eda = v.cded * (v.rf / 100), edl = v.ctax * (v.rf / 100);
+        const tax = cur + (edl - v.bdl) - (eda - v.bda);
+        return { rows: [['과세소득', money(ti)], ['당기법인세 (납부할 세액)', money(cur), true], ['기말 이연법인세자산', money(eda)], ['기말 이연법인세부채', money(edl)], ['이연법인세자산 증감', money(eda - v.bda)], ['이연법인세부채 증감', money(edl - v.bdl)], ['법인세비용', money(tax), true], ['평균유효세율', v.ebt > 0 ? pct(tax / v.ebt) : '—'], ['당기순이익', money(v.ebt - tax)]], notes: ti < 0 ? ['과세소득이 음수라 당기법인세는 0으로 두었습니다(이월결손금은 반영하지 않음).'] : [] };
+      },
+    },
+    {
+      id: 'eps', name: '주당이익 (기본 · 희석 EPS)',
+      note: '기본 EPS = (보통주 귀속 순이익 = 순이익 − 우선주배당) ÷ 가중평균 유통보통주식수. 주식수 변동은 한 줄에 "해당연도 중 유통된 개월수 증감주식수"(예: 6 +20000)로 입력합니다. 희석 EPS는 전환사채 이자(세후)와 전환주식수, 주식선택권의 자기주식법(순증가 주식수 = N×(1−K/평균주가))을 반영합니다. 무상증자·주식분할은 소급 조정이 필요해 반영하지 않습니다.',
+      fields: [
+        { k: 'ni', l: '당기순이익', d: '10000000' }, { k: 'pref', l: '우선주배당', d: '1000000', opt: true },
+        { k: 'base', l: '기초 유통보통주식수', d: '100000' },
+        { k: 'chg', l: '기중 변동 (개월수 증감주식수)', t: 'area', d: '6 +20000\n3 -5000', opt: true },
+        { k: 'cbi', l: '전환사채 이자 (세후, 선택)', d: '', opt: true }, { k: 'cbs', l: '전환 가정 가중주식수', d: '', opt: true },
+        { k: 'on', l: '주식선택권 수 N', d: '', opt: true }, { k: 'ok', l: '행사가격 K', d: '', opt: true }, { k: 'op', l: '평균 시장가격', d: '', opt: true },
+      ],
+      compute(v) {
+        let w = v.base;
+        if (v.chg) lines(v.chg).forEach((ln, i) => {
+          const p = ln.split(/\s+/);
+          const m = parseFloat(p[0]), d = parseFloat(p[1]);
+          if (!Number.isFinite(m) || !Number.isFinite(d) || m < 0 || m > 12) throw new Error(`${i + 1}번째 변동 줄은 "개월수(0~12) 증감주식수" 형식입니다`);
+          w += (d * m) / 12;
+        });
+        if (!(w > 0)) throw new Error('가중평균주식수가 0 이하입니다');
+        const num = v.ni - optN(v.pref, 0), basic = num / w;
+        let addI = optN(v.cbi, 0), addS = optN(v.cbs, 0);
+        const rows = [['가중평균 유통보통주식수', money(w, 1)], ['보통주 귀속 순이익', money(num)], ['기본 EPS', money(basic, 2), true]];
+        let optInc = 0;
+        if (v.on !== null && v.ok !== null && v.op !== null) { positive(v, ['op']); optInc = v.op > v.ok ? v.on * (1 - v.ok / v.op) : 0; rows.push(['주식선택권 순증가 주식수', money(optInc, 1)]); }
+        if (addI || addS || optInc) {
+          const dil = (num + addI) / (w + addS + optInc);
+          rows.push(['희석 EPS', money(dil, 2), true], ['희석효과', money(dil - basic, 2)]);
+          if (dil > basic + 1e-9) rows.push(['주의', '희석 EPS가 기본 EPS보다 큼 → 반희석 효과이므로 희석에서 제외해야 합니다']);
+        }
+        return { rows };
+      },
+    },
+    {
+      id: 'eqm', name: '지분법 (관계기업투자 장부금액 · 지분법이익)',
+      note: '투자차액을 식별가능 순자산 공정가치 차액(상각 대상)과 영업권(상각하지 않음)으로 나눕니다. 지분법이익 = 지분율 × 피투자기업 순이익 − 공정가치 차액의 상각액. 배당은 투자 장부금액에서 차감합니다. 내부거래 미실현이익, 기타포괄손익, 손상은 반영하지 않습니다.',
+      fields: [
+        { k: 'cost', l: '취득원가', d: '1500000' }, { k: 'p', l: '지분율 (%)', d: '30' },
+        { k: 'nab', l: '취득일 피투자 순자산 장부금액', d: '4000000' }, { k: 'fvd', l: '식별가능순자산 공정가치 − 장부 (상각대상)', d: '500000' },
+        { k: 'life', l: '차액 상각연수 (0 = 비상각)', d: '5' }, { k: 'ni', l: '피투자 당기순이익', d: '600000' }, { k: 'div', l: '피투자 배당 총액', d: '100000' },
+      ],
+      compute(v) {
+        positive(v, ['cost', 'p']);
+        if (v.p > 100) throw new Error('지분율은 100% 이하여야 합니다');
+        const sh = v.p / 100, fvn = sh * (v.nab + v.fvd), gw = v.cost - fvn;
+        const amort = v.life > 0 ? (sh * v.fvd) / v.life : 0;
+        const income = sh * v.ni - amort, divr = sh * v.div;
+        return { rows: [['취득 시 순자산 공정가치 중 지분', money(fvn)], [gw >= 0 ? '영업권 (투자차액)' : '염가매수차익 (당기손익)', money(Math.abs(gw)), true], ['지분법이익', money(income), true], ['  = 순이익 지분', money(sh * v.ni)], ['  − 공정가치 차액 상각', money(amort)], ['배당 수령 (투자 차감)', money(divr)], ['기말 투자 장부금액', money(v.cost + income - divr), true]] };
+      },
+    },
+    {
+      id: 'gw', name: '사업결합 · 영업권 (비지배지분 포함)',
+      note: '영업권 = 이전대가 + 비지배지분 − 식별가능순자산 공정가치. 비지배지분은 (가) 식별가능순자산의 비례지분(부분영업권) 또는 (나) 공정가치(전부영업권) 중 선택합니다. 음수이면 염가매수차익으로 당기이익에 인식합니다. 조건부대가, 취득관련원가(비용 처리)는 반영하지 않습니다.',
+      fields: [
+        { k: 'cons', l: '이전대가 (공정가치)', d: '9000000' }, { k: 'p', l: '취득 지분율 (%)', d: '80' },
+        { k: 'na', l: '식별가능순자산 공정가치', d: '10000000' },
+        { k: 'mth', l: '비지배지분 측정', t: 'sel', d: 'prop', opts: [['prop', '비례지분 (부분영업권)'], ['fv', '공정가치 (전부영업권)']] },
+        { k: 'ncifv', l: '비지배지분 공정가치 (공정가치법)', d: '2200000', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['cons', 'p', 'na']);
+        if (v.p > 100) throw new Error('지분율은 100% 이하여야 합니다');
+        const nci = v.mth === 'prop' ? (1 - v.p / 100) * v.na : v.ncifv;
+        if (nci === null) throw new Error('비지배지분 공정가치를 입력하세요');
+        const gw = v.cons + nci - v.na;
+        return { rows: [['비지배지분 측정액', money(nci)], [gw >= 0 ? '영업권' : '염가매수차익 (당기이익)', money(Math.abs(gw)), true], ['지배기업 귀속 영업권', money(v.mth === 'prop' ? gw : v.cons - (v.p / 100) * v.na)], ['연결 순자산 + 영업권', money(v.na + Math.max(gw, 0))]] };
+      },
+    },
+    {
+      id: 'imp', name: '자산손상 (회수가능액 · 손상차손)',
+      note: '회수가능액 = max(순공정가치(처분부대원가 차감), 사용가치). 사용가치 = 미래 현금흐름(1년차부터)의 현재가치. 손상차손 = 장부금액 − 회수가능액(양수일 때). 현금창출단위(CGU) 손상 시 영업권을 먼저 감액하는 배분은 별도로 계산하세요. 영업권 외 자산의 손상환입은 반영하지 않습니다.',
+      fields: [
+        { k: 'cv', l: '장부금액', d: '1000000' }, { k: 'fvl', l: '순공정가치 (FV − 처분원가)', d: '700000', opt: true },
+        { k: 'cf', l: '미래 현금흐름 (1년차부터)', t: 'area', d: '250000, 250000, 250000, 250000', opt: true },
+        { k: 'r', l: '할인율 (연 %)', d: '10', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['cv']);
+        let viu = null;
+        if (v.cf) { if (v.r === null) throw new Error('할인율을 입력하세요'); viu = parseList(v.cf, '현금흐름').reduce((s, c, i) => s + c / (1 + v.r / 100) ** (i + 1), 0); }
+        const cand = [v.fvl, viu].filter((x) => x !== null && x !== undefined);
+        if (!cand.length) throw new Error('순공정가치 또는 사용가치 정보를 입력하세요');
+        const rec = Math.max(...cand), loss = Math.max(0, v.cv - rec);
+        return { rows: [['순공정가치', v.fvl === null ? '—' : money(v.fvl)], ['사용가치', viu === null ? '—' : money(viu)], ['회수가능액', money(rec), true], ['손상차손', money(loss), true], ['손상 후 장부금액', money(v.cv - loss)], ['판단', loss > 0 ? '손상 발생 (장부 > 회수가능액)' : '손상 없음']] };
+      },
+    },
+    {
+      id: 'rev', name: '진행기준 수익 (건설계약 · 손실계약)',
+      note: '원가기준 투입법입니다. 진행률 = 누적 발생원가 ÷ 해당 연도 말 추정 총원가, 누적수익 = 계약금액 × 진행률. 추정 총원가가 계약금액을 초과하면 예상 총손실을 즉시 인식하고 그만큼을 손실충당부채로 둡니다. 두 목록의 개수(연도 수)는 같아야 합니다.',
+      fields: [
+        { k: 'price', l: '총 계약금액', d: '10000000' },
+        { k: 'inc', l: '연도별 당기 발생원가', t: 'area', d: '2000000, 4000000, 3000000' },
+        { k: 'est', l: '연도 말 추정 총원가', t: 'area', d: '8000000, 8500000, 9000000' },
+      ],
+      compute(v) {
+        positive(v, ['price']);
+        const inc = parseList(v.inc, '발생원가'), est = parseList(v.est, '추정총원가');
+        if (inc.length !== est.length) throw new Error('두 목록의 개수가 같아야 합니다');
+        const rows = []; let cum = 0, prevRev = 0, prevPL = 0;
+        inc.forEach((c, i) => {
+          if (!(est[i] > 0)) throw new Error('추정 총원가는 0보다 커야 합니다');
+          cum += c;
+          const pr = Math.min(cum / est[i], 1), cumRev = v.price * pr, cumGP = cumRev - cum;
+          const L = Math.max(0, est[i] - v.price), prov = L > 0 ? Math.max(0, L - Math.max(0, cum - cumRev)) : 0;
+          const cumPL = cumGP - prov, rev = cumRev - prevRev, pl = cumPL - prevPL;
+          rows.push([`${i + 1}년차`, `진행률 ${pct(pr)} · 수익 ${money(rev)} · 원가 ${money(c)} · 손익 ${money(pl)}${L > 0 ? ' · 손실충당부채 ' + money(prov) : ''}`, i === inc.length - 1]);
+          prevRev = cumRev; prevPL = cumPL;
+        });
+        return { rows: [['누적 계약손익', money(prevPL), true], ...rows] };
+      },
+    },
+    {
+      id: 'cb', name: '전환사채 (부채요소 · 전환권대가)',
+      note: '전환사채 발행금액을 일반사채(전환권 없는) 시장이자율로 할인한 현재가치(부채요소)와 나머지(전환권대가, 자본요소)로 나눕니다. 이후 부채요소는 유효이자율법으로 상각합니다. 연 1회 이자, 상환할증금 없음, 만기 일시상환을 가정합니다.',
+      fields: [
+        { k: 'face', l: '액면금액', d: '1000000' }, { k: 'cr', l: '표면이자율 (연 %)', d: '2' },
+        { k: 'mr', l: '일반사채 시장이자율 (연 %)', d: '8' }, { k: 'n', l: '만기 (년)', d: '3' },
+        { k: 'issue', l: '발행금액 (미입력 시 액면)', d: '', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['face', 'n']);
+        const n = Math.round(v.n);
+        if (n < 1 || n > 60 || Math.abs(v.n - n) > 1e-9) throw new Error('만기는 1~60 사이의 정수 년으로 입력하세요');
+        const c = (v.face * v.cr) / 100, r = v.mr / 100;
+        let liab = 0;
+        for (let i = 1; i <= n; i++) liab += c / (1 + r) ** i;
+        liab += v.face / (1 + r) ** n;
+        const issue = v.issue === null ? v.face : v.issue, eq = issue - liab;
+        const rows = [['발행금액', money(issue)], ['부채요소 (현재가치)', money(liab), true], ['전환권대가 (자본)', money(eq), true]];
+        let bv = liab;
+        for (let i = 1; i <= n; i++) { const ie = bv * r; bv += ie - c; rows.push([`${i}년차`, `이자비용 ${money(ie)} · 현금이자 ${money(c)} · 기말 장부 ${money(bv)}`]); }
+        return { rows, notes: eq < 0 ? ['전환권대가가 음수입니다. 시장이자율이 표면이자율보다 낮거나 발행금액이 너무 낮은지 확인하세요.'] : [] };
+      },
+    },
+    {
+      id: 'pen', name: '확정급여제도 (DBO · 사외적립자산 · 순확정급여부채)',
+      note: '확정급여채무(DBO)와 사외적립자산의 한 해 변동을 계산합니다. 근무원가·급여지급·기여금은 기말에 발생한다고 가정합니다. 이자원가·이자수익은 기초 잔액 × 할인율, 재측정요소(보험수리적손익, 사외적립자산 실제수익 − 이자수익)는 기타포괄손익입니다. 사외적립자산 실제수익을 비우면 이자수익과 같다고 봅니다.',
+      fields: [
+        { k: 'dbo0', l: '기초 DBO', d: '1000000' }, { k: 'pa0', l: '기초 사외적립자산', d: '800000' }, { k: 'r', l: '할인율 (%)', d: '4' },
+        { k: 'sc', l: '당기 근무원가', d: '150000' }, { k: 'ben', l: '급여 지급액', d: '50000' }, { k: 'ctb', l: '사외적립자산 기여금', d: '120000' },
+        { k: 'drm', l: 'DBO 보험수리적손실 (+손실 / −이익)', d: '30000', opt: true }, { k: 'pret', l: '사외적립자산 실제수익', d: '', opt: true },
+      ],
+      compute(v) {
+        const r = v.r / 100, ic = v.dbo0 * r, ii = v.pa0 * r, drm = optN(v.drm, 0), act = v.pret === null ? ii : v.pret;
+        const dbo1 = v.dbo0 + v.sc + ic - v.ben + drm, pa1 = v.pa0 + v.ctb - v.ben + act;
+        return { rows: [['이자원가', money(ic)], ['이자수익', money(ii)], ['퇴직급여비용 (당기손익)', money(v.sc + ic - ii), true], ['재측정요소 (기타포괄손익, 손실은 −)', money(-drm + (act - ii)), true], ['기말 DBO', money(dbo1)], ['기말 사외적립자산', money(pa1)], ['순확정급여부채(자산)', money(dbo1 - pa1), true]] };
+      },
+    },
+    {
+      id: 'shr', name: '주식기준보상 (주식선택권 보상원가)',
+      note: '부여일 공정가치로 가득기간에 걸쳐 비용을 인식합니다. 누적보상원가 = 부여수량 × 연도 말 예상 가득률 × 개당 공정가치 × (경과연수 ÷ 가득기간), 당기비용 = 누적 − 전기 누적. 가득기간 동안 매년 말 예상 가득률(%)을 쉼표로 입력하세요. 시장조건 외 조건의 변경, 취소·청산은 반영하지 않습니다.',
+      fields: [
+        { k: 'n', l: '부여수량 (전체)', d: '1000' }, { k: 'fv', l: '개당 공정가치 (부여일)', d: '1200' }, { k: 'vest', l: '가득기간 (년)', d: '3' },
+        { k: 'rates', l: '연도 말 예상 가득률 (%)', t: 'area', d: '90, 88, 85' },
+      ],
+      compute(v) {
+        positive(v, ['n', 'fv', 'vest']);
+        const vest = Math.round(v.vest);
+        if (vest < 1 || vest > 20 || Math.abs(v.vest - vest) > 1e-9) throw new Error('가득기간은 1~20 사이의 정수로 입력하세요');
+        const r = parseList(v.rates, '가득률');
+        if (r.length !== vest) throw new Error(`가득률은 가득기간(${vest})과 같은 개수로 입력하세요`);
+        const rows = []; let prev = 0;
+        r.forEach((x, i) => { if (x < 0 || x > 100) throw new Error('가득률은 0~100 사이여야 합니다'); const cum = v.n * (x / 100) * v.fv * ((i + 1) / vest); rows.push([`${i + 1}년차`, `당기 보상비용 ${money(cum - prev)} · 누적 ${money(cum)}`]); prev = cum; });
+        return { rows: [['총 보상원가 (최종)', money(prev), true], ...rows] };
+      },
+    },
+    // ---------- 원가관리회계 ----------
+    {
+      id: 'cvpm', name: '다제품 CVP (매출배합 · 손익분기점)',
+      note: '한 줄에 한 제품씩 "이름 단가 단위당변동비 매출배합비(수량 비율)"를 입력하세요. 매출배합비는 수량 기준 비율이며 합이 100일 필요는 없습니다(자동 정규화). 가중평균 단위당 공헌이익으로 손익분기점을 구하고 제품별로 나눕니다. 배합이 바뀌면 손익분기점도 달라집니다.',
+      fields: [
+        { k: 'items', l: '제품 목록', t: 'area', d: 'A 100 60 3\nB 200 150 2\nC 80 50 5' },
+        { k: 'fc', l: '총 고정비', d: '500000' }, { k: 'target', l: '목표이익 (선택)', d: '200000', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['fc']);
+        const it = lines(v.items).map((ln, i) => { const p = ln.split(/\s+/); const o = { n: p[0], p: parseFloat(p[1]), c: parseFloat(p[2]), m: parseFloat(p[3]) }; if (p.length < 4 || ![o.p, o.c, o.m].every(Number.isFinite) || o.m <= 0) throw new Error(`${i + 1}번째 줄은 "이름 단가 변동비 배합비" 형식입니다`); return o; });
+        const sm = it.reduce((s, x) => s + x.m, 0), cmU = it.reduce((s, x) => s + (x.m / sm) * (x.p - x.c), 0), revU = it.reduce((s, x) => s + (x.m / sm) * x.p, 0);
+        if (!(cmU > 0)) throw new Error('가중평균 공헌이익이 0 이하입니다');
+        const q = v.fc / cmU, rows = [['꾸러미당 가중평균 공헌이익', money(cmU)], ['가중평균 공헌이익률', pct(cmU / revU)], ['손익분기점 총 판매량', money(q, 2), true], ['손익분기점 매출액', money(v.fc / (cmU / revU)), true]];
+        it.forEach((x) => rows.push([`  ${x.n} 손익분기 수량`, money((q * x.m) / sm, 2)]));
+        if (v.target !== null) { const qt = (v.fc + v.target) / cmU; rows.push(['목표이익 달성 총 판매량', money(qt, 2)], ['목표이익 달성 매출액', money((v.fc + v.target) / (cmU / revU))]); }
+        return { rows };
+      },
+    },
+    {
+      id: 'var', name: '표준원가 차이분석 (재료 · 노무 · 제조간접비)',
+      note: '표준수량·표준시간(SQ, SH)은 실제 생산량에 허용된 표준투입량입니다. 가격(임률)차이 = (실제가격 − 표준가격) × 실제수량, 수량(능률)차이 = (실제수량 − 표준수량) × 표준가격. 양수는 불리(U), 음수는 유리(F)입니다. 재료는 구입량과 사용량이 같다고 가정합니다. 고정제조간접비 조업도차이는 예산 − 표준시간 × 고정배부율입니다.',
+      fields: [
+        { k: 'aq', l: '재료 실제사용량 AQ', d: '2100' }, { k: 'ap', l: '재료 실제단가 AP', d: '10.5' }, { k: 'sq', l: '재료 표준허용량 SQ', d: '2000' }, { k: 'sp', l: '재료 표준단가 SP', d: '10' },
+        { k: 'ah', l: '노무 실제시간 AH', d: '1050' }, { k: 'ar', l: '노무 실제임률 AR', d: '12.2' }, { k: 'sh', l: '노무 표준시간 SH', d: '1000' }, { k: 'sr', l: '노무 표준임률 SR', d: '12' },
+        { k: 'avo', l: '변동제조간접비 실제발생', d: '5400' }, { k: 'vr', l: '변동제조간접비 표준배부율 (시간당)', d: '5' },
+        { k: 'afo', l: '고정제조간접비 실제발생', d: '10300' }, { k: 'bfo', l: '고정제조간접비 예산', d: '10000' }, { k: 'nh', l: '기준조업도 (표준시간)', d: '1100' },
+      ],
+      compute(v) {
+        const rows = [['재료 가격차이', fav((v.ap - v.sp) * v.aq)], ['재료 수량차이', fav((v.aq - v.sq) * v.sp)], ['노무 임률차이', fav((v.ar - v.sr) * v.ah)], ['노무 능률차이', fav((v.ah - v.sh) * v.sr)], ['변동간접비 소비차이', fav(v.avo - v.ah * v.vr)], ['변동간접비 능률차이', fav((v.ah - v.sh) * v.vr)]];
+        if (v.nh > 0) { const fr = v.bfo / v.nh; rows.push(['고정간접비 예산차이', fav(v.afo - v.bfo)], ['고정간접비 조업도차이', fav(v.bfo - v.sh * fr)]); }
+        const std = v.sq * v.sp + v.sh * v.sr + v.sh * v.vr + (v.nh > 0 ? v.sh * (v.bfo / v.nh) : 0);
+        const act = v.aq * v.ap + v.ah * v.ar + v.avo + v.afo;
+        rows.push(['표준원가 (실제 생산량)', money(std), true], ['실제원가', money(act), true], ['총 차이', fav(act - std)]);
+        return { rows };
+      },
+    },
+    {
+      id: 'alloc', name: '보조부문비 배부 (직접 · 단계 · 상호배부법)',
+      note: '보조부문 S1, S2와 제조부문 P1, P2를 가정합니다. 용역 제공량(단위)을 각 부문별로 입력하세요(자기 부문 제공은 0). 단계배부법은 S1을 먼저 배부합니다(보통 용역 제공이 많거나 비용이 큰 부문 먼저). 상호배부법은 연립방정식으로 풉니다.',
+      fields: [
+        { k: 'c1', l: 'S1 부문비', d: '100000' }, { k: 'c2', l: 'S2 부문비', d: '80000' }, { k: 'p1', l: 'P1 부문비', d: '300000' }, { k: 'p2', l: 'P2 부문비', d: '200000' },
+        { k: 'a2', l: 'S1이 S2에 제공한 용역', d: '20' }, { k: 'a3', l: 'S1이 P1에 제공', d: '40' }, { k: 'a4', l: 'S1이 P2에 제공', d: '40' },
+        { k: 'b1', l: 'S2가 S1에 제공한 용역', d: '10' }, { k: 'b3', l: 'S2가 P1에 제공', d: '30' }, { k: 'b4', l: 'S2가 P2에 제공', d: '60' },
+      ],
+      compute(v) {
+        const d1 = v.a3 + v.a4, d2 = v.b3 + v.b4;
+        if (!(d1 > 0) || !(d2 > 0)) throw new Error('각 보조부문은 제조부문에 용역을 제공해야 합니다');
+        const dir = { P1: v.p1 + v.c1 * (v.a3 / d1) + v.c2 * (v.b3 / d2), P2: v.p2 + v.c1 * (v.a4 / d1) + v.c2 * (v.b4 / d2) };
+        const t1 = v.a2 + v.a3 + v.a4, s2tot = v.c2 + v.c1 * (v.a2 / t1);
+        const stp = { P1: v.p1 + v.c1 * (v.a3 / t1) + s2tot * (v.b3 / d2), P2: v.p2 + v.c1 * (v.a4 / t1) + s2tot * (v.b4 / d2) };
+        const t2 = v.b1 + v.b3 + v.b4, f12 = v.a2 / t1, f21 = v.b1 / t2, den = 1 - f12 * f21;
+        if (den <= 0) throw new Error('상호배부 연립방정식의 해가 없습니다');
+        const x1 = (v.c1 + f21 * v.c2) / den, x2 = (v.c2 + f12 * v.c1) / den;
+        const rec = { P1: v.p1 + x1 * (v.a3 / t1) + x2 * (v.b3 / t2), P2: v.p2 + x1 * (v.a4 / t1) + x2 * (v.b4 / t2) };
+        const tot = v.c1 + v.c2 + v.p1 + v.p2;
+        return { rows: [['직접배부법 P1 · P2', money(dir.P1) + ' · ' + money(dir.P2)], ['단계배부법 P1 · P2 (S1 먼저)', money(stp.P1) + ' · ' + money(stp.P2)], ['상호배부법 P1 · P2', money(rec.P1) + ' · ' + money(rec.P2), true], ['상호배부 배부 전 S1 · S2 총원가', money(x1) + ' · ' + money(x2)], ['검산: 총원가', money(tot) + ' = ' + money(rec.P1 + rec.P2)]] };
+      },
+    },
+    {
+      id: 'proc', name: '종합원가계산 (평균법 · 선입선출법)',
+      note: '재료비 투입률은 기말(기초)재공품에 재료가 투입된 정도(공정 초 투입이면 100%)이고, 가공비 완성도와 별도로 입력합니다. 평균법은 기초재공품 원가를 당기에 합산하고, 선입선출법은 기초재공품을 먼저 완성하는 것으로 봅니다. 공손·감손은 반영하지 않습니다.',
+      fields: [
+        { k: 'bq', l: '기초재공품 수량', d: '1000' }, { k: 'bmp', l: '기초 재료비 투입률 (%)', d: '100' }, { k: 'bcp', l: '기초 가공비 완성도 (%)', d: '40' },
+        { k: 'bmc', l: '기초재공품 재료비', d: '200000' }, { k: 'bcc', l: '기초재공품 가공비', d: '90000' },
+        { k: 'st', l: '당기 착수량', d: '9000' }, { k: 'done', l: '당기 완성품 수량', d: '8500' },
+        { k: 'emp', l: '기말 재료비 투입률 (%)', d: '100' }, { k: 'ecp', l: '기말 가공비 완성도 (%)', d: '60' },
+        { k: 'cmc', l: '당기 투입 재료비', d: '1800000' }, { k: 'ccc', l: '당기 투입 가공비', d: '1500000' },
+      ],
+      compute(v) {
+        const eq = v.bq + v.st - v.done;
+        if (v.bq < 0 || v.st < 0 || v.done <= 0) throw new Error('수량을 확인하세요');
+        if (eq < -1e-9) throw new Error('완성품 수량이 기초 + 착수량보다 많습니다');
+        const bm = v.bmp / 100, bc = v.bcp / 100, em = v.emp / 100, ec = v.ecp / 100;
+        const avgEm = v.done + eq * em, avgEc = v.done + eq * ec;
+        const avgMr = (v.bmc + v.cmc) / avgEm, avgCr = (v.bcc + v.ccc) / avgEc;
+        const avg = { done: v.done * (avgMr + avgCr), end: eq * em * avgMr + eq * ec * avgCr };
+        const fEm = v.done - v.bq * bm + eq * em, fEc = v.done - v.bq * bc + eq * ec;
+        const fMr = v.cmc / fEm, fCr = v.ccc / fEc;
+        const fDone = v.bmc + v.bcc + v.bq * (1 - bm) * fMr + v.bq * (1 - bc) * fCr + (v.done - v.bq) * (fMr + fCr);
+        const fEnd = eq * em * fMr + eq * ec * fCr, total = v.bmc + v.bcc + v.cmc + v.ccc;
+        return { rows: [['기말재공품 수량', sig(eq, 8)], ['평균법 완성품환산량 (재료 · 가공)', sig(avgEm, 8) + ' · ' + sig(avgEc, 8)], ['평균법 단위당 원가 (재료 · 가공)', avgMr.toFixed(4) + ' · ' + avgCr.toFixed(4)], ['평균법 완성품원가', money(avg.done), true], ['평균법 기말재공품원가', money(avg.end), true], ['선입선출법 완성품환산량 (재료 · 가공)', sig(fEm, 8) + ' · ' + sig(fEc, 8)], ['선입선출법 단위당 원가 (재료 · 가공)', fMr.toFixed(4) + ' · ' + fCr.toFixed(4)], ['선입선출법 완성품원가', money(fDone), true], ['선입선출법 기말재공품원가', money(fEnd), true], ['검산: 총원가', money(total) + ' = 평균 ' + money(avg.done + avg.end) + ' / FIFO ' + money(fDone + fEnd)]] };
+      },
+    },
+    {
+      id: 'joint', name: '결합원가 배부 (물량 · 판매가치 · 순실현가치 · 균등이익률)',
+      note: '한 줄에 한 제품씩 "이름 수량 최종단가 추가가공비총액 분리점단가"를 입력합니다. 추가가공을 하지 않으면 추가가공비 0, 분리점단가는 생략하세요(최종단가와 같다고 봄). 분리점 판매가치법은 분리점 시점 판매가치로, 순실현가치법은 최종 판매가치 − 추가가공비로, 균등매출총이익률법은 모든 제품의 매출총이익률이 같도록 배부합니다.',
+      fields: [
+        { k: 'jc', l: '결합원가 총액', d: '600000' },
+        { k: 'items', l: '제품 목록', t: 'area', d: 'A 1000 300 0\nB 2000 200 100000 120\nC 500 400 50000 180' },
+      ],
+      compute(v) {
+        positive(v, ['jc']);
+        const it = lines(v.items).map((ln, i) => {
+          const p = ln.split(/\s+/); const o = { n: p[0], q: parseFloat(p[1]), pf: parseFloat(p[2]), ac: parseFloat(p[3]), ps: p[4] === undefined ? undefined : parseFloat(p[4]) };
+          if (p.length < 4 || ![o.q, o.pf, o.ac].every(Number.isFinite) || o.q <= 0 || (o.ps !== undefined && !Number.isFinite(o.ps))) throw new Error(`${i + 1}번째 줄은 "이름 수량 최종단가 추가가공비 [분리점단가]" 형식입니다`);
+          if (o.ps === undefined) o.ps = o.pf;
+          return o;
+        });
+        const sum = (f) => it.reduce((s, x) => s + f(x), 0), by = (f) => { const t = sum(f); return it.map((x) => (v.jc * f(x)) / t); };
+        const phys = by((x) => x.q), split = by((x) => x.q * x.ps), nrv = by((x) => x.q * x.pf - x.ac);
+        const rev = sum((x) => x.q * x.pf), acT = sum((x) => x.ac), gpr = (rev - v.jc - acT) / rev;
+        const gm = it.map((x) => x.q * x.pf * (1 - gpr) - x.ac);
+        const rows = [['총 최종판매가치', money(rev)], ['총 매출총이익률 (균등이익률법)', pct(gpr)]];
+        it.forEach((x, i) => rows.push([x.n, `물량 ${money(phys[i], 0)} · 분리점가치 ${money(split[i], 0)} · NRV ${money(nrv[i], 0)} · 균등이익률 ${money(gm[i], 0)}`]));
+        return { rows, notes: gm.some((x) => x < 0) ? ['균등매출총이익률법에서 일부 제품의 결합원가 배부액이 음수입니다(추가가공비가 큰 제품). 정상 결과일 수 있으나 입력을 확인하세요.'] : [] };
+      },
+    },
+    {
+      id: 'abs', name: '전부원가 vs 변동원가 영업이익',
+      note: '전부원가는 고정제조간접비를 제품원가에 포함하므로 재고가 늘면 고정제조간접비 일부가 재고에 묻혀 이익이 커집니다. 차이 = 기말재고 수량 × 고정제조간접비 배부율 − 기초재고 수량 × 기초 배부율. 재고 흐름은 선입선출법으로 가정합니다.',
+      fields: [
+        { k: 'p', l: '단위당 판매가', d: '100' }, { k: 'q', l: '생산량', d: '10000' }, { k: 's', l: '판매량', d: '9000' },
+        { k: 'vm', l: '단위당 변동제조원가', d: '40' }, { k: 'fm', l: '고정제조간접비 총액', d: '200000' },
+        { k: 'vs', l: '단위당 변동판관비', d: '10' }, { k: 'fs', l: '고정판관비', d: '100000' },
+        { k: 'bi', l: '기초재고 수량', d: '0', opt: true }, { k: 'bf', l: '기초재고 단위당 고정제조원가', d: '', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['q', 'p']);
+        const bi = optN(v.bi, 0), rate = v.fm / v.q, bf = v.bf === null ? rate : v.bf;
+        if (v.s > bi + v.q + 1e-9) throw new Error('판매량이 가용 재고보다 많습니다');
+        const vi = (v.p - v.vm - v.vs) * v.s - v.fm - v.fs;
+        const fromBeg = Math.min(v.s, bi), fromCur = v.s - fromBeg;
+        const foh = fromBeg * bf + fromCur * rate, ai = v.p * v.s - (v.vm * v.s + foh) - v.vs * v.s - v.fs;
+        const endQ = bi + v.q - v.s;
+        return { rows: [['변동원가 영업이익', money(vi), true], ['전부원가 영업이익', money(ai), true], ['차이 (전부 − 변동)', money(ai - vi)], ['기말재고 수량', money(endQ, 0)], ['고정제조간접비 배부율', money(rate, 4)], ['검산: 기말재고 FOH − 기초재고 FOH', money(Math.min(endQ, v.q) * rate + Math.max(0, endQ - v.q) * bf - bi * bf)]], notes: ['생산량이 판매량보다 많으면 전부원가 이익이 더 큽니다.'] };
+      },
+    },
+    {
+      id: 'ri', name: '투자중심점 성과 (ROI · 잔여이익 · EVA)',
+      note: 'ROI = 영업이익 ÷ 투자액, 잔여이익(RI) = 영업이익 − 투자액 × 최저요구수익률, EVA = 세후영업이익(NOPAT) − 투하자본 × WACC. RI는 요구수익률을 넘는 투자안을 모두 채택하게 하지만 ROI는 부분적으로 반대 결정을 유도할 수 있습니다.',
+      fields: [
+        { k: 'oi', l: '영업이익', d: '2000000' }, { k: 'ia', l: '투자액 (평균영업자산)', d: '10000000' }, { k: 'req', l: '최저요구수익률 (%)', d: '15' },
+        { k: 'tax', l: '법인세율 (%, EVA용)', d: '20', opt: true }, { k: 'ic', l: '투하자본 (EVA용)', d: '9000000', opt: true }, { k: 'wacc', l: 'WACC (%, EVA용)', d: '10', opt: true },
+        { k: 'rev', l: '매출액 (선택, 회전율)', d: '25000000', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['ia']);
+        const rows = [['ROI', pct(v.oi / v.ia), true], ['잔여이익 RI', money(v.oi - v.ia * (v.req / 100)), true]];
+        if (v.rev !== null && v.rev > 0) rows.push(['매출액영업이익률', pct(v.oi / v.rev)], ['투자자산회전율', ratioX(v.rev / v.ia)]);
+        if (v.tax !== null && v.ic !== null && v.wacc !== null) { const nopat = v.oi * (1 - v.tax / 100); rows.push(['NOPAT', money(nopat)], ['EVA', money(nopat - v.ic * (v.wacc / 100)), true]); }
+        return { rows };
+      },
+    },
+    // ---------- 세법 · 상법 ----------
+    {
+      id: 'ptax', name: '누진세율 산출세액 (소득세 · 상속증여세 · 법인세)',
+      note: '구간별 한계세율로 산출세액을 계산합니다. 기본 제공 세율표는 소득세(2023년 이후 기본세율), 상속세·증여세, 법인세(2023~2025 사업연도 9·19·21·24%)이며 법 개정 여부는 직접 확인해야 합니다. "직접 입력"을 고르면 "상한금액 세율(%)"을 줄마다 입력합니다(마지막 줄 상한은 inf). 지방소득세율을 넣으면 산출세액에 가산합니다.',
+      fields: [
+        { k: 'base', l: '과세표준', d: '60000000' },
+        { k: 'tb', l: '세율표', t: 'sel', d: 'inc', opts: [['inc', '종합소득세 (2023년 이후 기본세율)'], ['inh', '상속세 · 증여세'], ['corp', '법인세 (2023~2025 사업연도, 개정 확인)'], ['cus', '직접 입력']] },
+        { k: 'cus', l: '직접 입력 세율표 (상한 세율)', t: 'area', d: '14000000 6\n50000000 15\ninf 24', opt: true },
+        { k: 'loc', l: '지방소득세율 (%, 선택)', d: '10', opt: true },
+      ],
+      compute(v) {
+        const T = { inc: [[14e6, 6], [50e6, 15], [88e6, 24], [150e6, 35], [300e6, 38], [500e6, 40], [1000e6, 42], [Infinity, 45]], inh: [[1e8, 10], [5e8, 20], [10e8, 30], [30e8, 40], [Infinity, 50]], corp: [[2e8, 9], [200e8, 19], [3000e8, 21], [Infinity, 24]] };
+        let tb;
+        if (v.tb === 'cus') {
+          tb = lines(v.cus || '').map((ln, i) => { const p = ln.split(/\s+/); const lim = /^(inf|∞)$/i.test(p[0]) ? Infinity : parseFloat(p[0].replace(/,/g, '')), r = parseFloat(p[1]); if (!(lim > 0) || !Number.isFinite(r) || r < 0) throw new Error(`${i + 1}번째 줄은 "상한금액 세율" 형식입니다`); return [lim, r]; });
+          if (!tb.length) throw new Error('세율표를 입력하세요');
+          for (let i = 1; i < tb.length; i++) if (!(tb[i][0] > tb[i - 1][0])) throw new Error('상한금액은 오름차순이어야 합니다');
+          if (tb[tb.length - 1][0] !== Infinity) tb.push([Infinity, tb[tb.length - 1][1]]);
+        } else tb = T[v.tb];
+        if (v.base < 0) throw new Error('과세표준은 0 이상이어야 합니다');
+        let prev = 0, tax = 0, mr = 0;
+        const rows = [];
+        for (const [lim, r] of tb) {
+          if (v.base <= prev) break;
+          const part = Math.min(v.base, lim) - prev; tax += part * (r / 100); mr = r;
+          rows.push([`${money(prev, 0)} ~ ${lim === Infinity ? '∞' : money(lim, 0)} (${r}%)`, money(part * (r / 100), 0)]);
+          prev = lim;
+        }
+        const loc = optN(v.loc, 0) / 100;
+        const top = [['산출세액', money(tax, 0), true], ['평균세율', v.base > 0 ? pct(tax / v.base) : '—'], ['한계세율', mr + ' %']];
+        if (loc > 0) top.push(['지방소득세 가산', money(tax * loc, 0)], ['합계 (지방세 포함)', money(tax * (1 + loc), 0), true]);
+        return { rows: [...top, ...rows], notes: ['공제·감면·세액공제는 반영하지 않은 산출세액입니다.'] };
+      },
+    },
+    {
+      id: 'wage', name: '근로소득 (근로소득공제 → 과세표준 → 산출세액)',
+      note: '근로소득금액 = 총급여 − 근로소득공제. 근로소득공제(2020년 이후): 500만 이하 70%, 1,500만 이하 350만 + 초과분 40%, 4,500만 이하 750만 + 15%, 1억 이하 1,200만 + 5%, 초과 1,475만 + 2%, 한도 2,000만 원. 과세표준 = 근로소득금액 − 인적공제(기본공제 1인 150만 원) − 기타 소득공제. 세액공제와 지방소득세는 반영하지 않으며, 세율은 종합소득세 기본세율입니다. 적용 연도의 법령을 확인하세요.',
+      fields: [
+        { k: 'gross', l: '총급여', d: '60000000' }, { k: 'dep', l: '기본공제 대상 인원', d: '2' },
+        { k: 'oth', l: '기타 소득공제 (4대보험, 신용카드 등)', d: '8000000', opt: true },
+      ],
+      compute(v) {
+        if (v.gross < 0) throw new Error('총급여는 0 이상이어야 합니다');
+        const g = v.gross;
+        let ded = g <= 5e6 ? g * 0.7 : g <= 15e6 ? 3.5e6 + (g - 5e6) * 0.4 : g <= 45e6 ? 7.5e6 + (g - 15e6) * 0.15 : g <= 1e8 ? 12e6 + (g - 45e6) * 0.05 : 14.75e6 + (g - 1e8) * 0.02;
+        ded = Math.min(ded, 20e6);
+        const inc = g - ded, base = Math.max(0, inc - Math.round(v.dep) * 1.5e6 - optN(v.oth, 0));
+        const tb = [[14e6, 6], [50e6, 15], [88e6, 24], [150e6, 35], [300e6, 38], [500e6, 40], [1000e6, 42], [Infinity, 45]];
+        let prev = 0, tax = 0;
+        for (const [lim, r] of tb) { if (base <= prev) break; tax += (Math.min(base, lim) - prev) * (r / 100); prev = lim; }
+        return { rows: [['근로소득공제', money(ded, 0)], ['근로소득금액', money(inc, 0), true], ['인적공제', money(Math.round(v.dep) * 1.5e6, 0)], ['과세표준', money(base, 0), true], ['산출세액 (세액공제 전)', money(tax, 0), true], ['평균세율 (총급여 대비)', g > 0 ? pct(tax / g) : '—']] };
+      },
+    },
+    {
+      id: 'vatp', name: '부가가치세 납부세액 (면세 · 공통매입세액 안분)',
+      note: '매출세액 = 과세 공급가액 × 세율(영세율 공급가액은 세액 0). 공통매입세액 중 면세 공급 몫은 불공제하며, 안분 비율 = 면세 공급가액 ÷ 총 공급가액입니다(직전기 비율 적용, 5억 미만·5% 미만 예외 등은 반영하지 않음). 납부세액 = 매출세액 − 공제 매입세액. 신고서 서식(가산세, 대손세액공제 등)은 반영하지 않습니다.',
+      fields: [
+        { k: 'tx', l: '과세 공급가액', d: '800000000' }, { k: 'zr', l: '영세율 공급가액', d: '100000000', opt: true }, { k: 'ex', l: '면세 공급가액', d: '100000000', opt: true },
+        { k: 'rate', l: '세율 (%)', d: '10' },
+        { k: 'pi', l: '과세사업 전용 매입세액', d: '50000000' }, { k: 'ci', l: '공통 매입세액', d: '20000000', opt: true },
+        { k: 'ni', l: '매입세액 불공제 (접대비 등)', d: '2000000', opt: true },
+      ],
+      compute(v) {
+        const tx = v.tx, zr = optN(v.zr, 0), ex = optN(v.ex, 0), tot = tx + zr + ex;
+        if (!(tot > 0) || v.rate < 0) throw new Error('공급가액과 세율을 확인하세요');
+        const out = tx * (v.rate / 100), ratio = ex / tot, ci = optN(v.ci, 0), nd = ci * ratio;
+        const inn = v.pi + ci - nd - optN(v.ni, 0);
+        return { rows: [['매출세액', money(out, 0)], ['면세 공급가액 비율', pct(ratio, 3)], ['공통매입세액 불공제분', money(nd, 0)], ['공제 매입세액', money(inn, 0)], [out - inn >= 0 ? '납부세액' : '환급세액', money(Math.abs(out - inn), 0), true]] };
+      },
+    },
+    {
+      id: 'div', name: '배당가능이익 · 이익준비금 (상법)',
+      note: '상법 제462조: 배당가능이익 = 대차대조표상 순자산액 − (자본금 + 그 결산기까지 적립된 자본준비금과 이익준비금 + 그 결산기에 적립해야 할 이익준비금 + 미실현이익). 이익준비금은 금전배당액의 10% 이상을 자본금의 1/2에 달할 때까지 적립합니다. 주식배당은 이익준비금 적립 대상이 아닙니다.',
+      fields: [
+        { k: 'na', l: '순자산액', d: '1000000000' }, { k: 'cap', l: '자본금', d: '300000000' },
+        { k: 'cr', l: '자본준비금 누계', d: '100000000' }, { k: 'rr', l: '이익준비금 누계', d: '100000000' },
+        { k: 'ur', l: '미실현이익 (상법 시행령)', d: '50000000', opt: true }, { k: 'div', l: '금전배당 계획액', d: '100000000' },
+      ],
+      compute(v) {
+        positive(v, ['cap']);
+        const need = Math.min(v.div * 0.1, Math.max(0, v.cap / 2 - v.rr)), ad = v.na - v.cap - v.cr - v.rr - need - optN(v.ur, 0);
+        const rows = [['이익준비금 법정 적립 한도 (자본금의 1/2)', money(v.cap / 2, 0)], ['이번 적립해야 할 이익준비금', money(need, 0), true], ['배당가능이익', money(ad, 0), true]];
+        rows.push(['배당 계획액 가능 여부', v.div <= ad + 1e-6 ? '가능 (배당가능이익 이내)' : '불가 (배당가능이익 초과, 초과분 ' + money(v.div - ad, 0) + ')']);
+        return { rows, notes: ad < 0 ? ['배당가능이익이 음수입니다. 상법상 배당할 수 없는 상태입니다.'] : [] };
+      },
+    },
+    // ---------- 감사 ----------
+    {
+      id: 'ar', name: '감사위험모형 (AR = IR × CR × DR)',
+      note: '감사위험(AR) = 고유위험(IR) × 통제위험(CR) × 발견위험(DR). 네 값 중 모르는 하나만 비워 두면 구합니다(보통 허용 발견위험 DR을 계산). DR이 낮을수록 실증절차의 범위·시기·성격을 보수적으로 설계해야 합니다. 값은 0~100%입니다.',
+      fields: [
+        { k: 'ar', l: '목표 감사위험 AR (%)', d: '5', opt: true }, { k: 'ir', l: '고유위험 IR (%)', d: '80', opt: true },
+        { k: 'cr', l: '통제위험 CR (%)', d: '50', opt: true }, { k: 'dr', l: '발견위험 DR (%)', d: '', opt: true },
+      ],
+      compute(v) {
+        const ks = ['ar', 'ir', 'cr', 'dr'], bl = ks.filter((k) => v[k] === null);
+        if (bl.length !== 1) throw new Error('모르는 값 하나만 비워 두세요');
+        const x = { ar: v.ar, ir: v.ir, cr: v.cr, dr: v.dr };
+        ks.forEach((k) => { if (x[k] !== null && (x[k] <= 0 || x[k] > 100)) throw new Error('값은 0 초과 100 이하이어야 합니다'); });
+        const b = bl[0];
+        if (b === 'ar') x.ar = (x.ir * x.cr * x.dr) / 10000; else if (b === 'ir') x.ir = (x.ar * 10000) / (x.cr * x.dr); else if (b === 'cr') x.cr = (x.ar * 10000) / (x.ir * x.dr); else x.dr = (x.ar * 10000) / (x.ir * x.cr);
+        const nm = { ar: '감사위험 AR', ir: '고유위험 IR', cr: '통제위험 CR', dr: '허용 발견위험 DR' };
+        const rows = [[nm[b], x[b].toFixed(3) + ' %', true], ['검산 (IR × CR × DR)', ((x.ir * x.cr * x.dr) / 10000).toFixed(3) + ' %']];
+        if (x[b] > 100 + 1e-9) rows.push(['주의', '100%를 넘어 현실적이지 않습니다. 입력 위험을 조정하세요']);
+        else if (b === 'dr') rows.push(['실증절차 수준', x.dr < 20 ? '매우 광범위' : x.dr < 50 ? '광범위' : '보통 이하']);
+        return { rows };
+      },
+    },
+    {
+      id: 'mat', name: '중요성 (전체 · 수행 · 명백하게 사소한 금액)',
+      note: '전체 중요성 = 기준값 × 비율. 흔한 기준은 세전이익 5%, 매출 0.5~1%, 총자산 0.5~1%, 자기자본 1~2% 이지만 회계법인 지침과 판단에 따라 다릅니다. 수행 중요성은 보통 전체 중요성의 50~75%, 명백하게 사소한 금액은 3~5% 수준입니다. 이 값들은 예시이며 실제 감사에서는 전문가적 판단으로 정합니다.',
+      fields: [
+        { k: 'base', l: '기준값 (예: 세전이익)', d: '2000000000' }, { k: 'rt', l: '전체 중요성 비율 (%)', d: '5' },
+        { k: 'pm', l: '수행 중요성 비율 (전체 중요성 대비 %)', d: '65' }, { k: 'tr', l: '명백하게 사소한 금액 비율 (%)', d: '5' },
+      ],
+      compute(v) {
+        positive(v, ['base', 'rt', 'pm', 'tr']);
+        const om = v.base * (v.rt / 100);
+        return { rows: [['전체 중요성 (OM)', money(om, 0), true], ['수행 중요성 (PM)', money(om * (v.pm / 100), 0), true], ['명백하게 사소한 금액', money(om * (v.tr / 100), 0), true]] };
+      },
+    },
+    {
+      id: 'attr', name: '속성 샘플링 (표본크기 · 일탈률 상한)',
+      note: '통제테스트용 통계적 표본추출입니다. 표본크기 n은 예상 일탈수(= n × 예상일탈률, 올림)를 허용하면서 P(일탈수 ≤ c | 허용일탈률) ≤ 1 − 신뢰수준이 되는 최소값입니다(이항분포, 비복원 보정 없음). 표본에서 발견한 일탈수를 넣으면 클로퍼-피어슨 방식의 일탈률 상한(UDL)을 구하고 허용일탈률과 비교합니다.',
+      fields: [
+        { k: 'cl', l: '신뢰수준 (%)', d: '95' }, { k: 'tr', l: '허용일탈률 (%)', d: '5' }, { k: 'er', l: '예상일탈률 (%)', d: '1' },
+        { k: 'on', l: '실제 표본 크기 (평가 시)', d: '', opt: true }, { k: 'ok', l: '발견한 일탈 수 (평가 시)', d: '', opt: true },
+      ],
+      compute(v) {
+        if (!(v.cl > 0 && v.cl < 100) || !(v.tr > 0 && v.tr < 100) || v.er < 0 || v.er >= v.tr) throw new Error('신뢰수준, 허용일탈률, 예상일탈률을 확인하세요 (예상 < 허용)');
+        const a = 1 - v.cl / 100, tr = v.tr / 100, er = v.er / 100;
+        let n = 0;
+        for (let m = 1; m <= 20000; m++) { const c = Math.ceil(m * er - 1e-9); if (binCdf(c, m, tr) <= a) { n = m; break; } }
+        if (!n) throw new Error('표본크기가 20,000을 넘습니다. 조건을 조정하세요');
+        const c = Math.ceil(n * er - 1e-9), rows = [['필요 표본크기 n', String(n), true], ['허용 일탈 수 c', String(c)], ['n 에서 달성 신뢰수준', ((1 - binCdf(c, n, tr)) * 100).toFixed(2) + ' %']];
+        if (v.on !== null && v.ok !== null) {
+          const m = Math.round(v.on), k = Math.round(v.ok);
+          if (m < 1 || k < 0 || k > m) throw new Error('표본 크기와 일탈 수를 확인하세요');
+          const u = k >= m ? 1 : bisect((p) => binCdf(k, m, p) - a, 0, 1);
+          rows.push(['표본 일탈률', pct(k / m)], ['일탈률 상한 (UDL)', pct(u), true], ['결론', u <= tr ? 'UDL ≤ 허용일탈률 → 통제 신뢰 가능' : 'UDL > 허용일탈률 → 통제 신뢰 불가, 실증절차 확대']);
+        }
+        return { rows };
+      },
+    },
+    {
+      id: 'mus', name: '화폐단위 샘플링 (MUS 표본크기 · 투사오류)',
+      note: '표본크기 n = 모집단 장부금액 × 신뢰계수(RF) ÷ (허용오류 − 예상오류 × 확장계수). RF = −ln(1−신뢰수준)(예상 오류 0건, 포아송). 확장계수는 보통 1.6(신뢰수준 95%) 정도를 사용합니다. 표본간격 = 장부금액 ÷ n. 평가: 오류가 발견된 항목의 오류율(오류금액/장부금액)을 쉼표로 입력하면 투사오류 = Σ오류율 × 표본간격을 구합니다. 증분허용(incremental allowance)은 근사로 생략했습니다.',
+      fields: [
+        { k: 'bv', l: '모집단 장부금액', d: '1000000000' }, { k: 'cl', l: '신뢰수준 (%)', d: '95' }, { k: 'tm', l: '허용오류 TM', d: '30000000' },
+        { k: 'em', l: '예상오류 EM', d: '5000000', opt: true }, { k: 'ef', l: '확장계수', d: '1.6', opt: true },
+        { k: 'tn', l: '오류 항목의 오류율 (평가 시, 0~1)', t: 'area', d: '', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['bv', 'tm']);
+        if (!(v.cl > 0 && v.cl < 100)) throw new Error('신뢰수준을 확인하세요');
+        const rf = -Math.log(1 - v.cl / 100), em = optN(v.em, 0), ef = optN(v.ef, 1.6), den = v.tm - em * ef;
+        if (!(den > 0)) throw new Error('허용오류가 예상오류 × 확장계수보다 커야 합니다');
+        const n = Math.ceil((v.bv * rf) / den), iv = v.bv / n;
+        const rows = [['신뢰계수 RF', rf.toFixed(3)], ['표본크기 n', String(n), true], ['표본간격', money(iv, 0), true]];
+        if (v.tn) {
+          const t = parseList(v.tn, '오류율');
+          if (t.some((x) => x < -1 || x > 1)) throw new Error('오류율은 −1~1 사이여야 합니다');
+          const pe = t.reduce((s, x) => s + x * iv, 0), bp = rf * iv;
+          rows.push(['투사오류', money(pe, 0)], ['기본 정밀도 (RF × 간격)', money(bp, 0)], ['오류 상한 (투사오류 + 기본정밀도)', money(pe + bp, 0), true], ['결론', pe + bp <= v.tm ? '상한 ≤ 허용오류 → 장부금액 수용 가능' : '상한 > 허용오류 → 추가 절차 또는 조정 필요']);
+        }
+        return { rows };
+      },
+    },
+    // ---------- 경제 · 경영 ----------
+    {
+      id: 'sd', name: '수요·공급 (균형 · 잉여 · 탄력성 · 조세)',
+      note: '선형 수요 Qd = a − bP, 선형 공급 Qs = c + dP. 균형가격 P* = (a − c)/(b + d). 소비자잉여·생산자잉여는 삼각형 면적이며, 종량세 t를 입력하면 새 균형과 조세수입, 경제적 귀착, 사중손실(DWL = ½ × t × 수량 감소)을 계산합니다.',
+      fields: [
+        { k: 'a', l: '수요 절편 a (Qd = a − bP)', d: '100' }, { k: 'b', l: '수요 기울기 b', d: '2' },
+        { k: 'c', l: '공급 절편 c (Qs = c + dP)', d: '-20' }, { k: 'd', l: '공급 기울기 d', d: '3' },
+        { k: 't', l: '종량세 t (공급자에게 부과)', d: '5', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['b', 'd']);
+        const P = (v.a - v.c) / (v.b + v.d), Q = v.a - v.b * P;
+        if (!(P > 0 && Q > 0)) throw new Error('균형가격과 수량이 양수가 되도록 입력하세요');
+        const pmax = v.a / v.b, pmin = Math.max(0, -v.c / v.d);
+        const rows = [['균형가격 P*', sig(P, 6), true], ['균형수량 Q*', sig(Q, 6), true], ['소비자잉여', money((pmax - P) * Q / 2)], ['생산자잉여', money((P - pmin) * Q / 2)], ['총잉여', money(((pmax - P) + (P - pmin)) * Q / 2)], ['수요의 가격탄력성 |ε|', ((v.b * P) / Q).toFixed(3)], ['공급의 가격탄력성', ((v.d * P) / Q).toFixed(3)]];
+        const t = optN(v.t, 0);
+        if (t > 0) {
+          const ps = (v.a - v.c - v.b * t) / (v.b + v.d), pd = ps + t, qt = v.c + v.d * ps;
+          if (qt > 0) rows.push(['세후 소비자 가격 · 생산자 수취가격', sig(pd, 5) + ' · ' + sig(ps, 5)], ['세후 거래량', sig(qt, 6)], ['조세수입', money(t * qt)], ['소비자 부담 · 생산자 부담', sig(pd - P, 4) + ' · ' + sig(P - ps, 4)], ['사중손실 DWL', money(0.5 * t * (Q - qt), 4), true]);
+          else rows.push(['세후 거래량', '0 이하 (세금이 너무 큼)']);
+        }
+        return { rows };
+      },
+    },
+    {
+      id: 'macro', name: '거시경제 (승수 · 화폐승수 · 피셔방정식)',
+      note: '비워 둔 항목은 계산에서 빠집니다. 정부지출승수 = 1/(1 − c(1−t) + m), 정액세 승수 = −c/(1 − c(1−t) + m), 균형재정승수(정액세)는 (1 − c)/(1 − c(1−t) + m). 화폐승수 = (1 + k)/(k + r) (k = 현금통화비율, r = 지급준비율). 피셔방정식은 명목 이자율 ≈ 실질 + 기대인플레이션이며 정확한 식은 (1+i) = (1+r)(1+π)입니다.',
+      fields: [
+        { k: 'c', l: '한계소비성향 c', d: '0.8', opt: true }, { k: 't', l: '비례세율 t', d: '0.2', opt: true }, { k: 'm', l: '한계수입성향 m', d: '0.1', opt: true },
+        { k: 'k', l: '현금통화비율 k', d: '0.2', opt: true }, { k: 'r', l: '지급준비율 r', d: '0.1', opt: true },
+        { k: 'i', l: '명목이자율 (%)', d: '5', opt: true }, { k: 'pi', l: '인플레이션율 (%)', d: '2', opt: true },
+      ],
+      compute(v) {
+        const rows = [];
+        if (v.c !== null) {
+          const t = optN(v.t, 0), m = optN(v.m, 0), den = 1 - v.c * (1 - t) + m;
+          if (den > 0) rows.push(['정부지출승수', (1 / den).toFixed(4), true], ['정액세 승수', (-v.c / den).toFixed(4)], ['균형재정승수 (정액세)', ((1 - v.c) / den).toFixed(4)]);
+        }
+        if (v.k !== null && v.r !== null && v.k + v.r > 0) rows.push(['화폐승수', ((1 + v.k) / (v.k + v.r)).toFixed(4), true]);
+        if (v.i !== null && v.pi !== null) rows.push(['실질이자율 (근사 i − π)', (v.i - v.pi).toFixed(3) + ' %'], ['실질이자율 (정확)', (((1 + v.i / 100) / (1 + v.pi / 100) - 1) * 100).toFixed(3) + ' %', true]);
+        if (!rows.length) throw new Error('계산할 값을 입력하세요');
+        return { rows };
+      },
+    },
+    {
+      id: 'forecast', name: '수요예측 (이동평균 · 지수평활 · 추세)',
+      note: '시계열을 시간순으로 입력합니다. 이동평균은 최근 k기 평균, 지수평활은 F₁ = X₁, Fₜ₊₁ = αXₜ + (1−α)Fₜ, 추세선은 최소제곱 직선 X = a + b·t 입니다. MAD와 MSE는 예측이 가능한 기간만으로 계산하며 값이 작을수록 정확합니다.',
+      fields: [
+        { k: 'x', l: '시계열 자료', t: 'area', d: '120, 130, 125, 140, 150, 145, 160' }, { k: 'k', l: '이동평균 기간 k', d: '3' }, { k: 'al', l: '평활상수 α', d: '0.3' },
+      ],
+      compute(v) {
+        const x = parseList(v.x, '시계열');
+        const k = Math.round(v.k);
+        if (x.length < 3) throw new Error('자료가 3개 이상 필요합니다');
+        if (k < 1 || k >= x.length) throw new Error('이동평균 기간 k는 1 이상, 자료 개수 미만이어야 합니다');
+        if (!(v.al > 0 && v.al <= 1)) throw new Error('α는 0 초과 1 이하여야 합니다');
+        const err = (f) => { const e = []; f.forEach((y, i) => { if (y !== null) e.push(x[i] - y); }); return [e.reduce((s, z) => s + Math.abs(z), 0) / e.length, e.reduce((s, z) => s + z * z, 0) / e.length]; };
+        const fm = x.map((_, i) => (i >= k ? mean(x.slice(i - k, i)) : null)), nextM = mean(x.slice(-k));
+        const fe = [null]; let f = x[0];
+        for (let i = 0; i < x.length; i++) { if (i > 0) fe.push(f); f = v.al * x[i] + (1 - v.al) * f; }
+        const nextE = f, n = x.length, tb = (n + 1) / 2, xb = mean(x);
+        let sxy = 0, sxx = 0; x.forEach((y, i) => { sxy += (i + 1 - tb) * (y - xb); sxx += (i + 1 - tb) ** 2; });
+        const b = sxy / sxx, a = xb - b * tb, ft = x.map((_, i) => a + b * (i + 1));
+        const em = err(fm), ee = err(fe), et = err(ft);
+        const fmt = (e) => `MAD ${e[0].toFixed(3)} · MSE ${e[1].toFixed(3)}`;
+        return { rows: [['이동평균 다음 기 예측', sig(nextM, 6), true], ['  정확도', fmt(em)], ['지수평활 다음 기 예측', sig(nextE, 6), true], ['  정확도', fmt(ee)], ['추세선 다음 기 예측', sig(a + b * (n + 1), 6), true], ['  추세선', `X = ${a.toFixed(3)} + ${b.toFixed(3)}·t`], ['  정확도', fmt(et)]] };
+      },
+    },
+    {
+      id: 'pert', name: '프로젝트 일정 (PERT 기대시간 · 완료확률)',
+      note: '활동을 한 줄에 하나씩 "이름 낙관 최빈 비관"으로 입력합니다. 기대시간 = (a + 4m + b)/6, 분산 = ((b − a)/6)². 입력한 활동들은 하나의 임계경로(직렬)라고 보고 합산하며, 경로가 여러 개인 네트워크는 임계경로 활동만 입력하세요. 정규분포 근사로 목표 기한 내 완료확률을 구합니다.',
+      fields: [
+        { k: 'act', l: '활동 목록', t: 'area', d: 'A 2 4 6\nB 3 5 13\nC 1 2 3' }, { k: 'dl', l: '목표 기한 (선택)', d: '12', opt: true },
+      ],
+      compute(v) {
+        const rows = []; let mu = 0, va = 0;
+        lines(v.act).forEach((ln, i) => {
+          const p = ln.split(/\s+/); const a = parseFloat(p[1]), m = parseFloat(p[2]), b = parseFloat(p[3]);
+          if (p.length < 4 || ![a, m, b].every(Number.isFinite) || !(a <= m && m <= b)) throw new Error(`${i + 1}번째 줄은 "이름 낙관 최빈 비관" (낙관 ≤ 최빈 ≤ 비관)이어야 합니다`);
+          const te = (a + 4 * m + b) / 6, s2 = ((b - a) / 6) ** 2; mu += te; va += s2;
+          rows.push([p[0], `기대 ${te.toFixed(3)} · 분산 ${s2.toFixed(3)}`]);
+        });
+        if (!rows.length) throw new Error('활동을 입력하세요');
+        const sd = Math.sqrt(va), out = [['경로 기대 소요시간', mu.toFixed(3), true], ['경로 표준편차', sd.toFixed(3)]];
+        if (v.dl !== null) out.push(['기한 내 완료확률', sd > 0 ? pct(ncdf((v.dl - mu) / sd)) : (v.dl >= mu ? '100.00 %' : '0.00 %'), true]);
+        return { rows: [...out, ...rows] };
+      },
+    },
+    {
+      id: 'mm1', name: '대기행렬 (M/M/s)',
+      note: '도착은 포아송(율 λ), 서비스시간은 지수분포(율 μ), 창구 s개인 단일 대기열 모형입니다. 이용률 ρ = λ/(sμ)는 1 미만이어야 안정적입니다. L은 시스템 내 평균 고객 수, Lq는 대기 고객 수, W는 시스템 체류시간, Wq는 대기시간입니다. 단위 시간은 λ, μ가 같게 입력하세요.',
+      fields: [{ k: 'lam', l: '도착률 λ (단위시간당)', d: '8' }, { k: 'mu', l: '창구당 서비스율 μ', d: '5' }, { k: 's', l: '창구 수 s', d: '2' }],
+      compute(v) {
+        positive(v, ['lam', 'mu']);
+        const s = Math.round(v.s);
+        if (s < 1 || s > 100) throw new Error('창구 수는 1~100 사이로 입력하세요');
+        const a = v.lam / v.mu, rho = a / s;
+        if (rho >= 1) throw new Error('이용률 ρ가 1 이상입니다. 대기열이 무한히 늘어납니다');
+        let sm = 0, term = 1;
+        for (let k = 0; k < s; k++) { if (k > 0) term *= a / k; sm += term; }
+        const as = (term * a) / s, p0 = 1 / (sm + as / (1 - rho)), pw = (as / (1 - rho)) * p0, lq = (pw * rho) / (1 - rho), wq = lq / v.lam;
+        return { rows: [['이용률 ρ', pct(rho)], ['시스템 비어 있을 확률 P₀', pct(p0, 3)], ['대기해야 할 확률 (얼랑 C)', pct(pw, 3)], ['대기 고객 수 Lq', lq.toFixed(4), true], ['시스템 내 고객 수 L', (lq + a).toFixed(4), true], ['평균 대기시간 Wq', wq.toFixed(4), true], ['평균 체류시간 W', (wq + 1 / v.mu).toFixed(4)]] };
+      },
+    },
+    {
+      id: 'learn', name: '학습곡선 (누적평균 · 증분단위시간)',
+      note: '학습률 L(예: 80%)이면 누적생산량이 2배가 될 때마다 누적평균시간(누적평균시간모형, Wright)이 L배가 됩니다. Y = T₁ × nᵇ, b = ln(L)/ln(2). 증분단위시간모형(Crawford)은 n번째 단위의 개별 시간이 T₁ × nᵇ 입니다. 임률을 넣으면 노무비도 계산합니다.',
+      fields: [{ k: 't1', l: '첫 단위 소요시간', d: '100' }, { k: 'l', l: '학습률 (%)', d: '80' }, { k: 'n', l: '누적 생산 단위 수 n', d: '8' }, { k: 'w', l: '시간당 임률 (선택)', d: '', opt: true }],
+      compute(v) {
+        positive(v, ['t1', 'n']);
+        if (!(v.l > 0 && v.l <= 100)) throw new Error('학습률은 0 초과 100 이하이어야 합니다');
+        const b = Math.log(v.l / 100) / Math.log(2), n = v.n;
+        const avg = v.t1 * n ** b, tot = avg * n;
+        let inc = 0; const N = Math.round(n);
+        for (let i = 1; i <= N; i++) inc += v.t1 * i ** b;
+        const rows = [['지수 b', b.toFixed(5)], ['누적평균시간모형: 누적평균시간', avg.toFixed(3), true], ['  총 소요시간', tot.toFixed(3)], ['증분단위시간모형: n번째 단위 시간', (v.t1 * n ** b).toFixed(3), true], ['  n 단위 총 소요시간', inc.toFixed(3)]];
+        if (v.w !== null) rows.push(['노무비 (누적평균시간모형)', money(tot * v.w, 0)], ['노무비 (증분단위시간모형)', money(inc * v.w, 0)]);
+        return { rows };
+      },
+    },
+  ];
+  ATOOLS2.forEach((t) => ATOOLS.push(t));
+  AGROUPS.length = 0;
+  [
+    ['재무관리 · 투자', ['tvm', 'npv', 'ear', 'wacc', 'bond', 'fwdrate', 'port', 'perf', 'ddm', 'mm', 'lev', 'rights']],
+    ['재무관리 · 파생 · 국제', ['bs', 'binom', 'fwd', 'irp']],
+    ['재무관리 · 운전자본', ['ccc', 'eoq']],
+    ['재무회계', ['amort', 'loan', 'dep', 'inv', 'lease', 'pvu', 'dtax', 'eps', 'eqm', 'gw', 'imp', 'rev', 'cb', 'pen', 'shr', 'jrn', 'ratio']],
+    ['원가관리회계', ['cvp', 'cvpm', 'var', 'alloc', 'proc', 'joint', 'abs', 'ri']],
+    ['세법 · 상법', ['ptax', 'wage', 'vat', 'vatp', 'ctax', 'div']],
+    ['회계감사', ['ar', 'mat', 'attr', 'mus']],
+    ['경제 · 경영', ['sd', 'macro', 'forecast', 'pert', 'mm1', 'learn']],
+  ].forEach((g) => AGROUPS.push(g));
+  // ACCT2 END
 
   const labState = { tool: 'dil', atool: 'tvm', vals: {} };
   try { Object.assign(labState, JSON.parse(localStorage.getItem('pf-lab') || '{}')); } catch (e) {}
