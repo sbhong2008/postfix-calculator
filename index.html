@@ -3400,8 +3400,27 @@ function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', 'â
       : { tools: TOOLS, groups: GROUPS, get: () => labState.tool, set: (x) => { labState.tool = x; } });
   const SCI_NUM = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
   function parseNum(raw) {
+    raw = raw.replace(/,/g, '');
     if (SCI_NUM.test(raw)) return parseFloat(raw);
     try { const r = evaluate(raw, 'num', 10, true).value; return typeof r === 'number' ? r : null; } catch (e) { return null; }
+  }
+  const groupDigits = () => state.mode === 'estate' || state.mode === 'acct';
+  const COMMA_NUM = /^[-+âˆ’]?[\d,]*\.?\d*$/;
+  function commaFmt(v) {
+    if (!COMMA_NUM.test(v) || v === '') return v;
+    const m = v.replace(/,/g, '').match(/^([-+âˆ’]?)(\d*)(\.?\d*)$/);
+    return m[1] + m[2].replace(/\B(?=(\d{3})+(?!\d))/g, ',') + m[3];
+  }
+  function commaInput(inp) {
+    const v = inp.value;
+    if (!COMMA_NUM.test(v)) return;
+    const pos = inp.selectionStart, before = v.slice(0, pos).replace(/[^\d.]/g, '').length;
+    const nv = commaFmt(v);
+    if (nv === v) return;
+    inp.value = nv;
+    let seen = 0, np = 0;
+    while (np < nv.length && seen < before) { if (/[\d.]/.test(nv[np])) seen++; np++; }
+    try { inp.setSelectionRange(np, np); } catch (e) {}
   }
   function readLab(tool) {
     const v = {};
@@ -3470,6 +3489,7 @@ function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', 'â
         input = h('input', { type: 'text' });
         input.inputMode = f.t === 'text' ? 'text' : 'decimal';
         input.value = saved[f.k] ?? f.d ?? '';
+        if (groupDigits() && f.t !== 'text') { input.value = commaFmt(input.value); input.addEventListener('input', () => commaInput(input)); }
       }
       input.id = 'lab-' + tool.id + '-' + f.k;
       input.autocomplete = 'off';
