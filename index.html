@@ -1,0 +1,1682 @@
+<title>포스트픽스 계산기</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* Layout: 계산기 카드(입력·키패드) 옆에 계산 기록 패널. 좁은 화면에서는 위아래로 쌓음. */
+  :root {
+    --bg: #eceff1;
+    --surface: #fafbfb;
+    --ink: #1a2428;
+    --muted: #5a6a72;
+    --key: #e2e8eb;
+    --key-op: #cfdadf;
+    --key-hover: #d6dfe3;
+    --accent: #0f766e;
+    --accent-ink: #ffffff;
+    --danger: #b3261e;
+    --line: #cbd6db;
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    --sans: "IBM Plex Sans", -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #11171a; --surface: #192125; --ink: #e6edf0; --muted: #93a3ab;
+      --key: #263137; --key-op: #314047; --key-hover: #3a4b53;
+      --accent: #3fc1b0; --accent-ink: #08201c; --danger: #ff8a80; --line: #33434b;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #11171a; --surface: #192125; --ink: #e6edf0; --muted: #93a3ab;
+    --key: #263137; --key-op: #314047; --key-hover: #3a4b53;
+    --accent: #3fc1b0; --accent-ink: #08201c; --danger: #ff8a80; --line: #33434b;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: var(--sans); font-size: 15px;
+    padding-block: 20px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  .shell { max-width: 860px; margin: 0 auto; display: grid; gap: 16px; grid-template-columns: minmax(0, 400px) minmax(0, 1fr); align-items: start; }
+  @media (max-width: 760px) { .shell { grid-template-columns: minmax(0, 1fr); } }
+
+  .calc, .history { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
+  .calc { padding: 14px; display: grid; gap: 12px; }
+
+  .bar { display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+  .modes { display: inline-flex; flex-wrap: wrap; background: var(--key); border-radius: 9px; padding: 3px; gap: 2px; }
+  .modes button, .pill {
+    font: inherit; font-size: 13px; font-weight: 500; color: var(--muted);
+    background: transparent; border: 0; border-radius: 7px; padding: 6px 12px; cursor: pointer;
+  }
+  .modes button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgb(0 0 0 / .12); }
+  .pill { background: var(--key); }
+  .pill:hover { background: var(--key-hover); }
+
+  .screen { background: var(--bg); border-radius: 10px; padding: 12px 14px; display: grid; gap: 2px; min-height: 148px; align-content: end; text-align: right; }
+  .prev { font-family: var(--mono); font-size: 13px; color: var(--muted); min-height: 18px; overflow-wrap: anywhere; }
+  .expr { font-family: var(--mono); font-size: 30px; font-weight: 500; line-height: 1.2; overflow-wrap: anywhere; min-height: 36px; }
+  .expr.long { font-size: 22px; }
+  .live { font-family: var(--mono); font-size: 18px; color: var(--accent); min-height: 26px; overflow-wrap: anywhere; }
+  .live.err { color: var(--danger); font-family: var(--sans); font-size: 14px; }
+  .rpn { font-family: var(--mono); font-size: 12px; color: var(--muted); border-top: 1px dashed var(--line); margin-top: 6px; padding-top: 6px; overflow-wrap: anywhere; min-height: 24px; }
+  .rpn b { font-family: var(--sans); font-weight: 600; margin-right: 6px; }
+  .bases { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; font-family: var(--mono); font-size: 12px; color: var(--muted); text-align: left; margin-top: 6px; }
+  .bases span { overflow-wrap: anywhere; }
+  .bases b { font-family: var(--sans); color: var(--ink); margin-right: 6px; }
+
+  .keys { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+  .keys.six { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .keys.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  button.k {
+    font-family: var(--mono); font-size: 18px; font-weight: 500; color: var(--ink);
+    background: var(--key); border: 0; border-radius: 10px; min-height: 50px; cursor: pointer;
+    transition: background .12s;
+  }
+  button.k:hover { background: var(--key-hover); }
+  button.k:active { transform: translateY(1px); }
+  button.k.op { background: var(--key-op); }
+  button.k.fn { font-size: 15px; background: var(--key-op); }
+  button.k.eq { background: var(--accent); color: var(--accent-ink); }
+  button.k.eq:hover { filter: brightness(1.08); }
+  button.k:disabled { opacity: .35; cursor: not-allowed; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .history { padding: 14px; min-height: 120px; }
+  .history h2 { margin: 0; font-size: 14px; font-weight: 600; }
+  .history header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .history ol { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; }
+  .history li button { width: 100%; text-align: right; font-family: var(--mono); font-size: 14px; color: var(--ink); background: transparent; border: 0; border-radius: 8px; padding: 8px 10px; cursor: pointer; overflow-wrap: anywhere; }
+  .history li button:hover { background: var(--key); }
+  .history li small { display: block; color: var(--muted); font-size: 12px; }
+  .empty { color: var(--muted); font-size: 13px; line-height: 1.5; }
+  .conv { display: grid; gap: 12px; }
+  .cv-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; align-items: stretch; }
+  .conv input, .conv select { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 12px; min-width: 0; width: 100%; }
+  .conv input { font-family: var(--mono); font-size: 22px; }
+  .cv-out { font-family: var(--mono); font-size: 24px; font-weight: 500; color: var(--accent); background: var(--bg); border-radius: 10px; padding: 12px; overflow-wrap: anywhere; text-align: right; display: flex; align-items: center; justify-content: flex-end; min-height: 52px; }
+  .cv-out.err { color: var(--danger); font-family: var(--sans); font-size: 14px; }
+  .cv-swap { justify-self: center; }
+  .cv-all { display: grid; gap: 0; font-family: var(--mono); font-size: 13px; }
+  .cv-all div { display: flex; justify-content: space-between; gap: 12px; padding: 7px 4px; border-bottom: 1px solid var(--line); }
+  .cv-all span:first-child { color: var(--muted); font-family: var(--sans); }
+  .cv-all span:last-child { text-align: right; overflow-wrap: anywhere; }
+  .cv-note { color: var(--muted); font-size: 12px; line-height: 1.5; }
+  .conv details summary { cursor: pointer; font-size: 13px; font-weight: 500; }
+  .cv-rates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 10px; margin-top: 8px; }
+  .cv-rates label { display: grid; gap: 2px; font-size: 12px; color: var(--muted); }
+  .cv-rates input { font-size: 13px; padding: 6px 8px; }
+  .lab-form { display: grid; gap: 10px; }
+  .lab-f { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+  .lab-in { display: grid; grid-template-columns: minmax(0, 1fr) 92px; gap: 6px; }
+  .conv .lab-f input { font-size: 18px; padding: 10px 12px; }
+  .conv textarea { font-family: var(--mono); font-size: 14px; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; width: 100%; min-width: 0; resize: vertical; }
+  .cv-all .em span:last-child { color: var(--accent); font-weight: 600; }
+  .foot { grid-column: 1 / -1; color: var(--muted); font-size: 12px; line-height: 1.5; }
+  @media (prefers-reduced-motion: reduce) { button.k { transition: none; } }
+</style>
+
+<main class="shell" id="shell">
+  <section class="calc" aria-label="계산기">
+    <div class="bar">
+      <div class="modes" role="group" aria-label="계산 모드">
+        <button type="button" id="mode-basic" data-mode="basic" aria-pressed="true">기본</button>
+        <button type="button" id="mode-sci" data-mode="sci" aria-pressed="false">공학</button>
+        <button type="button" id="mode-prog" data-mode="prog" aria-pressed="false">프로그래머</button>
+        <button type="button" id="mode-fx" data-mode="fx" aria-pressed="false">환율</button>
+        <button type="button" id="mode-unit" data-mode="unit" aria-pressed="false">단위</button>
+        <button type="button" id="mode-lab" data-mode="lab" aria-pressed="false">연구</button>
+      </div>
+      <div style="display:flex; gap:6px;">
+        <button type="button" class="pill" id="deg" hidden>Deg</button>
+        <button type="button" class="pill" id="copy">복사</button>
+      </div>
+    </div>
+
+    <div class="screen" id="screen" aria-live="polite">
+      <div class="prev" id="prev"></div>
+      <div class="expr" id="expr">0</div>
+      <div class="live" id="live"></div>
+      <div class="rpn" id="rpn"><b>후위</b>—</div>
+      <div class="bases" id="bases" hidden></div>
+    </div>
+
+    <div id="baseSel" class="modes" role="group" aria-label="진법" hidden></div>
+    <div class="keys six" id="hexKeys" hidden></div>
+    <div class="keys" id="progOps" hidden></div>
+    <div class="keys" id="sciKeys" hidden></div>
+    <div class="keys" id="mainKeys"></div>
+    <div class="conv" id="conv" hidden></div>
+  </section>
+
+  <aside class="history" id="histPanel" aria-label="계산 기록">
+    <header><h2>계산 기록</h2><button type="button" class="pill" id="clearHist">지우기</button></header>
+    <div id="histBox"></div>
+  </aside>
+
+  <p class="foot">입력한 수식은 토큰으로 나눈 뒤 후위 표기로 바꿔 계산합니다. 입력 중에도 결과가 미리 계산되고, <b>=</b>을 한 번 더 누르면 직전 연산이 반복됩니다. 키보드로도 입력할 수 있습니다.</p>
+</main>
+
+<script>
+// ENGINE START
+const FNS = ['sin', 'cos', 'tan', 'ln', 'log'];
+const PREC_NUM = { '+': 1, '−': 1, '×': 2, '÷': 2, neg: 3, '^': 4 };
+const PREC_INT = { '|': 1, '⊕': 2, '&': 3, '<<': 4, '>>': 4, '+': 5, '−': 5, '×': 6, '÷': 6, '%': 6, neg: 7, not: 7 };
+const RIGHT = new Set(['^', 'neg', 'not']);
+const DIGITS = '0123456789ABCDEF';
+
+function tokenize(src, mode, base) {
+  const s = src.replace(/\s+/g, '');
+  const out = [];
+  let i = 0;
+  const intRe = mode === 'int' ? new RegExp('^[' + DIGITS.slice(0, base) + ']+', 'i') : null;
+  while (i < s.length) {
+    const c = s[i], rest = s.slice(i);
+    let m;
+    if (mode === 'num') {
+      if ((m = /^(\d+\.?\d*|\.\d+)/.exec(rest))) { out.push({ t: 'num', v: parseFloat(m[1]), s: m[1] }); i += m[1].length; continue; }
+      if ((m = /^(sin|cos|tan|ln|log)/.exec(rest))) { out.push({ t: 'fn', v: m[1], s: m[1] }); i += m[1].length; continue; }
+      if (c === '√') { out.push({ t: 'fn', v: '√', s: '√' }); i++; continue; }
+      if (c === 'π') { out.push({ t: 'num', v: Math.PI, s: 'π' }); i++; continue; }
+      if (c === 'e') { out.push({ t: 'num', v: Math.E, s: 'e' }); i++; continue; }
+      if (c === '!' || c === '%') { out.push({ t: 'post', v: c, s: c }); i++; continue; }
+      if (c === '^') { out.push({ t: 'op', v: '^', s: '^' }); i++; continue; }
+    } else {
+      if ((m = intRe.exec(rest))) {
+        const pre = base === 16 ? '0x' : base === 8 ? '0o' : base === 2 ? '0b' : '';
+        out.push({ t: 'num', v: BigInt(pre + m[0]), s: m[0].toUpperCase() }); i += m[0].length; continue;
+      }
+      if (rest.startsWith('<<')) { out.push({ t: 'op', v: '<<', s: '<<' }); i += 2; continue; }
+      if (rest.startsWith('>>')) { out.push({ t: 'op', v: '>>', s: '>>' }); i += 2; continue; }
+      if (c === '~') { out.push({ t: 'not', v: '~', s: '~' }); i++; continue; }
+      if (c === '%') { out.push({ t: 'op', v: '%', s: 'mod' }); i++; continue; }
+      if (c === '&' || c === '|' || c === '⊕') { out.push({ t: 'op', v: c, s: c }); i++; continue; }
+    }
+    if (c === '+') { out.push({ t: 'op', v: '+', s: '+' }); i++; continue; }
+    if (c === '−' || c === '-') { out.push({ t: 'op', v: '−', s: '−' }); i++; continue; }
+    if (c === '×' || c === '*') { out.push({ t: 'op', v: '×', s: '×' }); i++; continue; }
+    if (c === '÷' || c === '/') { out.push({ t: 'op', v: '÷', s: '÷' }); i++; continue; }
+    if (c === '(') { out.push({ t: 'lp', s: '(' }); i++; continue; }
+    if (c === ')') { out.push({ t: 'rp', s: ')' }); i++; continue; }
+    throw new Error('알 수 없는 문자: ' + c);
+  }
+  return out;
+}
+
+function normalize(raw) {
+  const out = [];
+  const openers = ['op', 'neg', 'not', 'fn', 'lp'];
+  for (let tk of raw) {
+    const prev = out[out.length - 1];
+    const noLeft = !prev || openers.includes(prev.t);
+    if (tk.t === 'op' && noLeft) {
+      if (tk.v === '−') tk = { t: 'neg', v: '−', s: '−' };
+      else if (tk.v === '+') continue;
+      else throw new Error('수식 오류');
+    }
+    if (tk.t === 'post' && noLeft) throw new Error('수식 오류');
+    if (prev && ['num', 'post', 'rp'].includes(prev.t) && ['num', 'fn', 'lp', 'not'].includes(tk.t)) {
+      out.push({ t: 'op', v: '×', s: '×' });
+    }
+    out.push(tk);
+  }
+  return out;
+}
+
+function toPostfix(tokens, mode) {
+  const P = mode === 'num' ? PREC_NUM : PREC_INT;
+  const out = [], st = [];
+  let depth = 0;
+  for (const tk of tokens) {
+    if (tk.t === 'num' || tk.t === 'post') out.push(tk);
+    else if (tk.t === 'fn' || tk.t === 'neg' || tk.t === 'not') st.push(tk);
+    else if (tk.t === 'lp') { st.push(tk); depth++; }
+    else if (tk.t === 'op') {
+      const p = P[tk.v];
+      while (st.length) {
+        const top = st[st.length - 1];
+        if (top.t === 'lp' || top.t === 'fn') break;
+        const tp = P[top.t === 'op' ? top.v : top.t];
+        if (tp > p || (tp === p && !RIGHT.has(tk.v))) out.push(st.pop()); else break;
+      }
+      st.push(tk);
+    } else if (tk.t === 'rp') {
+      if (!depth) throw new Error('괄호가 맞지 않습니다');
+      while (st.length && st[st.length - 1].t !== 'lp') out.push(st.pop());
+      st.pop(); depth--;
+      if (st.length && st[st.length - 1].t === 'fn') out.push(st.pop());
+    }
+  }
+  while (st.length) { const x = st.pop(); if (x.t !== 'lp') out.push(x); }
+  return out;
+}
+
+const clean = (x) => (Math.abs(x) < 1e-12 ? 0 : x);
+function applyNum(tk, a, b, deg) {
+  switch (tk.v) {
+    case '+': return a + b;
+    case '−': return a - b;
+    case '×': return a * b;
+    case '÷': if (b === 0) throw new Error('0으로 나눌 수 없습니다'); return a / b;
+    case '^': return Math.pow(a, b);
+  }
+}
+function applyFn(name, a, deg) {
+  const r = deg ? Math.PI / 180 : 1;
+  switch (name) {
+    case 'sin': return clean(Math.sin(a * r));
+    case 'cos': return clean(Math.cos(a * r));
+    case 'tan': {
+      const t = Math.tan(a * r);
+      if (Math.abs(t) > 1e14) throw new Error('정의되지 않습니다');
+      return clean(t);
+    }
+    case 'ln': if (a <= 0) throw new Error('정의되지 않습니다'); return Math.log(a);
+    case 'log': if (a <= 0) throw new Error('정의되지 않습니다'); return Math.log10(a);
+    case '√': if (a < 0) throw new Error('음수의 제곱근은 계산할 수 없습니다'); return Math.sqrt(a);
+  }
+}
+function applyInt(op, a, b) {
+  let r;
+  switch (op) {
+    case '+': r = a + b; break;
+    case '−': r = a - b; break;
+    case '×': r = a * b; break;
+    case '÷': if (b === 0n) throw new Error('0으로 나눌 수 없습니다'); r = a / b; break;
+    case '%': if (b === 0n) throw new Error('0으로 나눌 수 없습니다'); r = a % b; break;
+    case '&': r = a & b; break;
+    case '|': r = a | b; break;
+    case '⊕': r = a ^ b; break;
+    case '<<': if (b < 0n || b > 63n) throw new Error('시프트 범위는 0~63입니다'); r = a << b; break;
+    case '>>': if (b < 0n || b > 63n) throw new Error('시프트 범위는 0~63입니다'); r = a >> b; break;
+  }
+  return BigInt.asIntN(64, r);
+}
+
+function evalPostfix(rpn, mode, deg) {
+  const s = [];
+  const need = (n) => { if (s.length < n) throw new Error('수식이 완성되지 않았습니다'); };
+  for (const tk of rpn) {
+    if (tk.t === 'num') s.push(tk.v);
+    else if (tk.t === 'neg') { need(1); s.push(mode === 'num' ? -s.pop() : BigInt.asIntN(64, -s.pop())); }
+    else if (tk.t === 'not') { need(1); s.push(BigInt.asIntN(64, ~s.pop())); }
+    else if (tk.t === 'fn') { need(1); s.push(applyFn(tk.v, s.pop(), deg)); }
+    else if (tk.t === 'post') {
+      need(1); const a = s.pop();
+      if (tk.v === '%') s.push(a / 100);
+      else {
+        if (!Number.isInteger(a) || a < 0 || a > 170) throw new Error('팩토리얼은 0~170의 정수만 가능합니다');
+        let f = 1; for (let k = 2; k <= a; k++) f *= k; s.push(f);
+      }
+    } else if (tk.t === 'op') {
+      need(2); const b = s.pop(), a = s.pop();
+      s.push(mode === 'num' ? applyNum(tk, a, b) : applyInt(tk.v, a, b));
+    }
+  }
+  if (s.length !== 1) throw new Error('수식이 완성되지 않았습니다');
+  const v = s[0];
+  if (mode === 'num' && !Number.isFinite(v)) throw new Error('계산 범위를 벗어났습니다');
+  return v;
+}
+
+function evaluate(expr, mode, base, deg) {
+  const tokens = normalize(tokenize(expr, mode, base));
+  if (!tokens.length) throw new Error('빈 수식');
+  const rpn = toPostfix(tokens, mode);
+  return { value: evalPostfix(rpn, mode, deg), rpn, tokens };
+}
+
+function fmtNum(v) {
+  if (Object.is(v, -0)) v = 0;
+  const r = parseFloat(v.toPrecision(12));
+  const a = Math.abs(r);
+  if (r !== 0 && (a >= 1e15 || a < 1e-6)) {
+    const [m, e] = r.toExponential().split('e');
+    return m + '×10^' + (e[0] === '+' ? e.slice(1) : e.replace('-', '−'));
+  }
+  return String(r).replace('-', '−');
+}
+function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', '−'); }
+// ENGINE END
+
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const state = { cv: { cat: '길이', amount: '1', from: 'USD', to: 'KRW' }, cvOut: '', mode: 'basic', base: 10, deg: true, expr: '', prev: '', fresh: false, rep: null, err: '', hist: [] };
+
+  const calcMode = () => (state.mode === 'prog' ? 'int' : 'num');
+  const base = () => (state.mode === 'prog' ? state.base : 10);
+  const BINOPS = '+−×÷^&|⊕<>%';
+
+  try { state.hist = JSON.parse(localStorage.getItem('pf-calc-hist') || '[]').slice(0, 30); } catch (e) { state.hist = []; }
+  const saveHist = () => { try { localStorage.setItem('pf-calc-hist', JSON.stringify(state.hist)); } catch (e) {} };
+
+  function ev(expr) { return evaluate(expr, calcMode(), base(), state.deg); }
+  function show(v) { return calcMode() === 'num' ? fmtNum(v) : fmtInt(v, state.base); }
+  function group(str) {
+    if (calcMode() !== 'num' || /[×^e]/.test(str)) return str;
+    const neg = str.startsWith('−'); const body = neg ? str.slice(1) : str;
+    const [i, f] = body.split('.');
+    return (neg ? '−' : '') + i.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (f ? '.' + f : '');
+  }
+
+  function preview() {
+    let e = state.expr;
+    if (!e) return null;
+    for (let n = 0; n < 6; n++) {
+      try {
+        const r = ev(e);
+        return r;
+      } catch (err) {
+        const last = e[e.length - 1];
+        if (e.endsWith('<<') || e.endsWith('>>')) e = e.slice(0, -2);
+        else if (last && ('+−×÷^&|⊕-*/('.includes(last))) e = e.slice(0, -1).replace(/(sin|cos|tan|ln|log|√)$/, '');
+        else if (/(sin|cos|tan|ln|log|√)$/.test(e)) e = e.replace(/(sin|cos|tan|ln|log|√)$/, '');
+        else return null;
+        if (!e) return null;
+      }
+    }
+    return null;
+  }
+
+  function render() {
+    const conv = isConvMode();
+    $('screen').hidden = conv; $('mainKeys').hidden = conv; $('conv').hidden = !conv; $('histPanel').hidden = conv;
+    $('shell').style.gridTemplateColumns = conv ? (state.mode === 'lab' ? 'minmax(0, 520px)' : 'minmax(0, 400px)') : '';
+    if (conv) { ['sciKeys', 'hexKeys', 'progOps', 'baseSel'].forEach((i) => ($(i).hidden = true)); return; }
+    $('prev').textContent = state.prev;
+    const ex = $('expr');
+    ex.textContent = state.expr || '0';
+    ex.classList.toggle('long', state.expr.length > 16);
+    const live = $('live'), rpn = $('rpn'), bases = $('bases');
+    live.className = 'live';
+    let r = null;
+    if (state.err) { live.textContent = state.err; live.classList.add('err'); }
+    else {
+      r = preview();
+      const isPlain = r && r.rpn.length === 1 && r.rpn[0].t === 'num';
+      live.textContent = r && !state.fresh && !isPlain ? '= ' + group(show(r.value)) : '';
+    }
+    rpn.innerHTML = '<b>후위</b>';
+    rpn.append(r ? r.rpn.map((t) => (t.t === 'neg' ? '±' : t.s || t.v)).join(' ') : '—');
+    if (state.mode === 'prog') {
+      bases.hidden = false;
+      const val = r ? r.value : null;
+      const parts = [['HEX', 16], ['DEC', 10], ['OCT', 8], ['BIN', 2]];
+      bases.replaceChildren(...parts.map(([n, b]) => {
+        const sp = document.createElement('span');
+        const bb = document.createElement('b'); bb.textContent = n;
+        sp.append(bb, val === null ? '—' : fmtInt(val, b));
+        return sp;
+      }));
+    } else bases.hidden = true;
+    renderKeys();
+    renderHist();
+  }
+
+  // ---- 입력 처리
+  function startFresh() { if (state.fresh) { state.expr = ''; state.prev = ''; state.fresh = false; state.rep = null; } }
+  function insert(text, kind) {
+    state.err = '';
+    if (kind === 'value') startFresh();
+    else if (state.fresh) { state.fresh = false; state.prev = state.expr + ' →'; }
+    let e = state.expr;
+    if (kind === 'op') {
+      const last = e[e.length - 1];
+      if (!e && text !== '−') return render();
+      if (e && BINOPS.includes(last) && last !== '%' && !(last === '<' || last === '>')) {
+        if (text === '−' && '×÷^'.includes(last)) e += text; else e = e.slice(0, -1) + text;
+      } else if (e && (e.endsWith('<<') || e.endsWith('>>'))) e = e.slice(0, -2) + text;
+      else e += text;
+    } else if (kind === 'post') {
+      if (!e || BINOPS.includes(e[e.length - 1]) && e[e.length - 1] !== '%') return render();
+      e += text;
+    } else e += text;
+    state.expr = e; render();
+  }
+  function backspace() {
+    state.err = ''; state.fresh = false; state.prev = '';
+    state.expr = state.expr.replace(/(sin\(|cos\(|tan\(|ln\(|log\(|√\(|<<|>>|[\s\S])$/, '');
+    render();
+  }
+  function clearAll() { state.expr = ''; state.prev = ''; state.err = ''; state.fresh = false; state.rep = null; render(); }
+  function negate() {
+    if (!state.expr) return;
+    state.err = '';
+    const m = /^−\((.*)\)$/.exec(state.expr);
+    state.expr = m ? m[1] : '−(' + state.expr + ')';
+    render();
+  }
+
+  function equals() {
+    if (!state.expr) return;
+    let expr = state.expr;
+    if (state.fresh && state.rep) expr = state.expr + state.rep.op + state.rep.rhs;
+    try {
+      const r = ev(expr);
+      const res = show(r.value);
+      const t = r.tokens, n = t.length;
+      state.rep = n >= 3 && t[n - 1].t === 'num' && t[n - 2].t === 'op' ? { op: t[n - 2].s === 'mod' ? '%' : t[n - 2].s, rhs: t[n - 1].s } : null;
+      state.hist.unshift({ e: expr, r: res, m: state.mode, b: state.base });
+      state.hist = state.hist.slice(0, 30); saveHist();
+      state.prev = expr + ' ='; state.expr = res; state.fresh = true; state.err = '';
+    } catch (err) { state.err = err.message; }
+    render();
+  }
+
+  function press(action, value) {
+    if (action === 'value') insert(value, 'value');
+    else if (action === 'op') insert(value, 'op');
+    else if (action === 'post') insert(value, 'post');
+    else if (action === 'raw') insert(value, 'raw');
+    else if (action === 'eq') equals();
+    else if (action === 'clear') clearAll();
+    else if (action === 'back') backspace();
+    else if (action === 'neg') negate();
+  }
+
+  // ---- 키패드
+  function mk(parent, defs) {
+    parent.replaceChildren(...defs.map((d) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'k ' + (d.cls || ''); b.textContent = d.label;
+      if (d.aria) b.setAttribute('aria-label', d.aria);
+      if (d.off) b.disabled = true;
+      b.addEventListener('click', () => press(d.a, d.v));
+      return b;
+    }));
+  }
+  const V = (l, cls) => ({ label: l, a: 'value', v: l, cls });
+  function renderKeys() {
+    const prog = state.mode === 'prog';
+    const dis = (ch) => prog && DIGITS.indexOf(ch) >= state.base;
+    const main = [
+      { label: 'C', a: 'clear', cls: 'op', aria: '모두 지우기' }, { label: '⌫', a: 'back', cls: 'op', aria: '한 글자 지우기' },
+      { label: prog ? 'mod' : '%', a: prog ? 'op' : 'post', v: '%', cls: 'op' }, { label: '÷', a: 'op', v: '÷', cls: 'op' },
+      { ...V('7'), off: dis('7') }, { ...V('8'), off: dis('8') }, { ...V('9'), off: dis('9') }, { label: '×', a: 'op', v: '×', cls: 'op' },
+      { ...V('4'), off: dis('4') }, { ...V('5'), off: dis('5') }, { ...V('6'), off: dis('6') }, { label: '−', a: 'op', v: '−', cls: 'op' },
+      { ...V('1'), off: dis('1') }, { ...V('2'), off: dis('2') }, { ...V('3'), off: dis('3') }, { label: '+', a: 'op', v: '+', cls: 'op' },
+      { label: '±', a: 'neg', cls: 'op', aria: '부호 바꾸기' }, { ...V('0'), off: dis('0') }, { ...V('.'), off: prog }, { label: '=', a: 'eq', cls: 'eq', aria: '계산' },
+    ];
+    mk($('mainKeys'), main);
+    $('sciKeys').hidden = state.mode !== 'sci';
+    if (state.mode === 'sci') {
+      mk($('sciKeys'), [
+        { label: 'sin', a: 'value', v: 'sin(', cls: 'fn' }, { label: 'cos', a: 'value', v: 'cos(', cls: 'fn' }, { label: 'tan', a: 'value', v: 'tan(', cls: 'fn' }, { label: 'xʸ', a: 'op', v: '^', cls: 'fn', aria: '거듭제곱' },
+        { label: 'ln', a: 'value', v: 'ln(', cls: 'fn' }, { label: 'log', a: 'value', v: 'log(', cls: 'fn' }, { label: '√', a: 'value', v: '√(', cls: 'fn', aria: '제곱근' }, { label: 'x²', a: 'post', v: '^2', cls: 'fn', aria: '제곱' },
+        { label: 'π', a: 'value', v: 'π', cls: 'fn' }, { label: 'e', a: 'value', v: 'e', cls: 'fn' }, { label: '(', a: 'value', v: '(', cls: 'fn' }, { label: ')', a: 'raw', v: ')', cls: 'fn' },
+        { label: 'n!', a: 'post', v: '!', cls: 'fn', aria: '팩토리얼' },
+      ]);
+    }
+    $('hexKeys').hidden = !prog;
+    $('progOps').hidden = !prog;
+    $('baseSel').hidden = !prog;
+    if (prog) {
+      mk($('hexKeys'), 'ABCDEF'.split('').map((c) => ({ ...V(c), off: dis(c) })));
+      mk($('progOps'), [
+        { label: '<<', a: 'op', v: '<<', cls: 'fn' }, { label: '>>', a: 'op', v: '>>', cls: 'fn' }, { label: '&', a: 'op', v: '&', cls: 'fn' }, { label: '|', a: 'op', v: '|', cls: 'fn' },
+        { label: '⊕', a: 'op', v: '⊕', cls: 'fn', aria: 'XOR' }, { label: '~', a: 'value', v: '~', cls: 'fn', aria: 'NOT' }, { label: '(', a: 'value', v: '(', cls: 'fn' }, { label: ')', a: 'raw', v: ')', cls: 'fn' },
+      ]);
+      const sel = $('baseSel');
+      sel.replaceChildren(...[['HEX', 16], ['DEC', 10], ['OCT', 8], ['BIN', 2]].map(([n, b]) => {
+        const bt = document.createElement('button'); bt.type = 'button'; bt.textContent = n;
+        bt.setAttribute('aria-pressed', String(state.base === b));
+        bt.addEventListener('click', () => setBase(b));
+        return bt;
+      }));
+    }
+  }
+
+  function setBase(b) {
+    if (b === state.base) return;
+    let next = '';
+    if (state.expr) { try { next = fmtInt(ev(state.expr).value, b).replace('−', '-'); } catch (e) { next = ''; } }
+    state.base = b; state.expr = next.replace('-', '−'); state.prev = ''; state.fresh = false; state.err = ''; state.rep = null;
+    render();
+  }
+
+  function setMode(m) {
+    state.mode = m; state.expr = ''; state.prev = ''; state.err = ''; state.fresh = false; state.rep = null;
+    document.querySelectorAll('.modes [data-mode]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
+    $('deg').hidden = m !== 'sci';
+    if (m === 'fx' || m === 'unit') buildConv(); else if (m === 'lab') buildLab();
+    render();
+  }
+
+  function renderHist() {
+    const box = $('histBox');
+    if (!state.hist.length) {
+      const p = document.createElement('p'); p.className = 'empty';
+      p.textContent = '아직 계산 기록이 없습니다. 수식을 입력하고 = 을 누르면 여기에 쌓입니다.';
+      box.replaceChildren(p); return;
+    }
+    const ol = document.createElement('ol');
+    state.hist.forEach((h) => {
+      const li = document.createElement('li'), b = document.createElement('button'), sm = document.createElement('small');
+      b.type = 'button'; sm.textContent = h.e + ' ='; b.append(sm, document.createTextNode(group(h.r)));
+      b.addEventListener('click', () => {
+        if ((h.m === 'prog') !== (state.mode === 'prog')) return;
+        state.expr = h.r; state.prev = ''; state.fresh = true; state.rep = null; state.err = ''; render();
+      });
+      li.append(b); ol.append(li);
+    });
+    box.replaceChildren(ol);
+  }
+
+  // ---- 환율·단위 변환
+  // 환율은 외부 조회가 막혀 있어 기준일 값을 내장하고, 직접 수정한 값은 이 브라우저에만 저장한다.
+  const FX = { date: '2026-10-16', src: 'open.er-api.com', rates: { KRW: 1342.74, USD: 1, JPY: 158.087, EUR: 0.89165, CNY: 6.70299, GBP: 0.75405, AUD: 1.44602, CAD: 1.41915, CHF: 0.82829, HKD: 7.84743, SGD: 1.28234, THB: 33.5261, VND: 25856.49, TWD: 32.3603, PHP: 63.0843, INR: 95.1001, AED: 3.6725 } };
+  const FXN = { KRW: '대한민국 원', USD: '미국 달러', JPY: '일본 엔', EUR: '유로', CNY: '중국 위안', GBP: '영국 파운드', AUD: '호주 달러', CAD: '캐나다 달러', CHF: '스위스 프랑', HKD: '홍콩 달러', SGD: '싱가포르 달러', THB: '태국 바트', VND: '베트남 동', TWD: '대만 달러', PHP: '필리핀 페소', INR: '인도 루피', AED: 'UAE 디르함' };
+  const UNITS = {
+    길이: { m: 1, km: 1000, cm: 0.01, mm: 0.001, in: 0.0254, ft: 0.3048, yd: 0.9144, mi: 1609.344, 자: 10 / 33 },
+    넓이: { '㎡': 1, '㎢': 1e6, ha: 1e4, 평: 400 / 121, 에이커: 4046.8564224, 'ft²': 0.09290304 },
+    무게: { kg: 1, g: 0.001, mg: 1e-6, t: 1000, lb: 0.45359237, oz: 0.028349523125, '근(600g)': 0.6, 돈: 0.00375 },
+    부피: { L: 1, mL: 0.001, '㎥': 1000, 'gal(US)': 3.785411784, cup: 0.2365882365, 'fl oz': 0.0295735295625, 되: 1.8039 },
+    속도: { 'm/s': 1, 'km/h': 1 / 3.6, mph: 0.44704, kn: 1852 / 3600 },
+    시간: { 초: 1, 분: 60, 시간: 3600, 일: 86400, 주: 604800 },
+    데이터: { B: 1, KB: 1024, MB: 1048576, GB: 1073741824, TB: 1099511627776 },
+    온도: { '°C': 1, '°F': 1, K: 1 },
+  };
+  let fxSaved = {};
+  try { fxSaved = JSON.parse(localStorage.getItem('pf-fx') || '{}'); } catch (e) { fxSaved = {}; }
+  const saveFx = () => { try { localStorage.setItem('pf-fx', JSON.stringify(fxSaved)); } catch (e) {} };
+  const fxRates = () => Object.assign({}, FX.rates, fxSaved);
+  const h = (tag, props, ...kids) => { const e = document.createElement(tag); Object.assign(e, props || {}); e.append(...kids); return e; };
+  const cvEl = {};
+  const isFx = () => state.mode === 'fx';
+  const keysOf = () => (isFx() ? Object.keys(FX.rates) : Object.keys(UNITS[state.cv.cat]));
+  const labelOf = (k) => (isFx() ? k + ' · ' + FXN[k] : k);
+
+  function convert(v, from, to) {
+    if (isFx()) { const r = fxRates(); return (v / r[from]) * r[to]; }
+    if (state.cv.cat === '온도') {
+      const c = from === '°C' ? v : from === '°F' ? ((v - 32) * 5) / 9 : v - 273.15;
+      return to === '°C' ? c : to === '°F' ? (c * 9) / 5 + 32 : c + 273.15;
+    }
+    const U = UNITS[state.cv.cat];
+    return (v * U[from]) / U[to];
+  }
+  function fmtConv(v) {
+    if (!Number.isFinite(v)) return '—';
+    if (Object.is(v, -0)) v = 0;
+    const a = Math.abs(v);
+    if (a !== 0 && (a >= 1e15 || a < 1e-6)) return fmtNum(v);
+    const frac = isFx() ? (a >= 100 ? 2 : 4) : a >= 1000 ? 3 : 6;
+    return v.toLocaleString('en-US', { maximumFractionDigits: frac }).replace('-', '−');
+  }
+  function ensureSel() {
+    const keys = keysOf();
+    if (isFx()) {
+      if (!keys.includes(state.cv.from)) state.cv.from = 'USD';
+      if (!keys.includes(state.cv.to)) state.cv.to = 'KRW';
+    } else {
+      if (!keys.includes(state.cv.from)) state.cv.from = keys[0];
+      if (!keys.includes(state.cv.to) || state.cv.to === state.cv.from) state.cv.to = keys.find((k) => k !== state.cv.from);
+    }
+  }
+  function fillSelect(sel, value) {
+    sel.replaceChildren(...keysOf().map((k) => h('option', { value: k, textContent: labelOf(k) })));
+    sel.value = value;
+  }
+  function updateConv() {
+    let v = null;
+    try { const r = evaluate(state.cv.amount, 'num', 10, true).value; if (typeof r === 'number') v = r; } catch (e) { v = null; }
+    if (v === null) {
+      cvEl.out.textContent = '숫자나 수식을 입력하세요'; cvEl.out.classList.add('err');
+      cvEl.all.replaceChildren(); state.cvOut = ''; return;
+    }
+    cvEl.out.classList.remove('err');
+    const r = convert(v, state.cv.from, state.cv.to);
+    cvEl.out.textContent = fmtConv(r) + ' ' + state.cv.to;
+    state.cvOut = String(parseFloat(r.toPrecision(12)));
+    cvEl.all.replaceChildren(...keysOf().map((k) => h('div', {}, h('span', { textContent: labelOf(k) }), h('span', { textContent: fmtConv(convert(v, state.cv.from, k)) }))));
+  }
+  function buildConv() {
+    ensureSel();
+    const box = $('conv');
+    const parts = [];
+    if (!isFx()) {
+      const cat = h('select', { id: 'cvCat' });
+      cat.setAttribute('aria-label', '변환 종류');
+      cat.append(...Object.keys(UNITS).map((c) => h('option', { value: c, textContent: c })));
+      cat.value = state.cv.cat;
+      cat.addEventListener('change', () => { state.cv.cat = cat.value; state.cv.from = ''; state.cv.to = ''; buildConv(); render(); });
+      parts.push(cat);
+    }
+    const amount = h('input', { id: 'cvAmount', type: 'text', value: state.cv.amount });
+    amount.inputMode = 'decimal'; amount.setAttribute('aria-label', '변환할 값'); amount.autocomplete = 'off';
+    const from = h('select', { id: 'cvFrom' }); from.setAttribute('aria-label', '변환 전 단위');
+    const to = h('select', { id: 'cvTo' }); to.setAttribute('aria-label', '변환 후 단위');
+    fillSelect(from, state.cv.from); fillSelect(to, state.cv.to);
+    const swap = h('button', { type: 'button', className: 'pill cv-swap', textContent: '⇅ 서로 바꾸기' });
+    cvEl.out = h('div', { className: 'cv-out', id: 'cvOut' });
+    cvEl.out.setAttribute('aria-live', 'polite');
+    cvEl.all = h('div', { className: 'cv-all' });
+    amount.addEventListener('input', () => { state.cv.amount = amount.value; updateConv(); });
+    from.addEventListener('change', () => { state.cv.from = from.value; updateConv(); });
+    to.addEventListener('change', () => { state.cv.to = to.value; updateConv(); });
+    swap.addEventListener('click', () => { [state.cv.from, state.cv.to] = [state.cv.to, state.cv.from]; from.value = state.cv.from; to.value = state.cv.to; updateConv(); });
+    parts.push(h('div', { className: 'cv-row' }, amount, from), swap, h('div', { className: 'cv-row' }, cvEl.out, to), cvEl.all);
+    if (isFx()) {
+      const note = h('p', { className: 'cv-note' });
+      note.textContent = '기준일 ' + FX.date + ' (' + FX.src + ') 참고값입니다. 실시간 환율이나 은행·환전소의 적용 환율과 다릅니다. 필요하면 아래에서 직접 수정하세요.';
+      const grid = h('div', { className: 'cv-rates' });
+      const saved = fxRates();
+      Object.keys(FX.rates).filter((k) => k !== 'USD').forEach((k) => {
+        const inp = h('input', { type: 'number', step: 'any', min: '0', value: String(saved[k]), id: 'fx-' + k });
+        inp.addEventListener('input', () => {
+          const n = parseFloat(inp.value);
+          if (n > 0) { fxSaved[k] = n; saveFx(); updateConv(); }
+        });
+        grid.append(h('label', { htmlFor: 'fx-' + k }, '1 USD = ' + k, inp));
+      });
+      const reset = h('button', { type: 'button', className: 'pill', textContent: '기준일 값으로 되돌리기' });
+      reset.addEventListener('click', () => { fxSaved = {}; saveFx(); buildConv(); render(); });
+      parts.push(note, h('details', {}, h('summary', { textContent: '환율 직접 수정' }), grid, h('p', {}, reset)));
+    }
+    box.replaceChildren(...parts);
+    updateConv();
+  }
+
+  // ---- 연구 탭 (의생명공학 실험·통계 도구)
+  const isConvMode = () => state.mode === 'fx' || state.mode === 'unit' || state.mode === 'lab';
+  // LAB START
+  const NA = 6.02214076e23;
+  const LU = {
+    conc: { M: 1, mM: 1e-3, 'µM': 1e-6, nM: 1e-9, pM: 1e-12 },
+    vol: { L: 1, mL: 1e-3, 'µL': 1e-6 },
+    mass: { g: 1, mg: 1e-3, 'µg': 1e-6, ng: 1e-9, pg: 1e-12 },
+    mol: { mol: 1, mmol: 1e-3, 'µmol': 1e-6, nmol: 1e-9, pmol: 1e-12, fmol: 1e-15 },
+  };
+  function sig(x, n = 4) {
+    if (!Number.isFinite(x)) return '—';
+    if (x === 0) return '0';
+    const a = Math.abs(x);
+    let s;
+    if (a >= 1e7 || a < 1e-3) s = x.toExponential(n - 1).replace('e+', '×10^').replace('e-', '×10^-');
+    else s = parseFloat(x.toPrecision(n)).toLocaleString('en-US', { maximumFractionDigits: 8 });
+    return s.replace(/-/g, '−');
+  }
+  function sc(v, type) {
+    const base = Object.entries(LU[type]).sort((a, b) => b[1] - a[1]);
+    if (v === 0) return '0 ' + base[0][0];
+    const a = Math.abs(v);
+    const pick = base.find(([, f]) => a / f >= 1 - 1e-9) || base[base.length - 1];
+    return sig(v / pick[1]) + ' ' + pick[0];
+  }
+  const fmtP = (p) => (p < 0.0001 ? '< 0.0001' : p.toFixed(4));
+  const parseList = (s, label) => {
+    const a = String(s).split(/[\s,;]+/).filter(Boolean).map(Number);
+    if (!a.length || a.some((x) => !Number.isFinite(x))) throw new Error(label + ': 숫자 목록을 확인하세요');
+    return a;
+  };
+  const mean = (a) => a.reduce((s, x) => s + x, 0) / a.length;
+  const sdev = (a) => {
+    if (a.length < 2) throw new Error('표준편차는 값이 2개 이상 필요합니다');
+    const m = mean(a);
+    return Math.sqrt(a.reduce((s, x) => s + (x - m) ** 2, 0) / (a.length - 1));
+  };
+  function lgamma(x) {
+    const c = [76.18009172947146, -86.50532032941677, 24.01409824083091, -1.231739572450155, 0.1208650973866179e-2, -0.5395239384953e-5];
+    let y = x, t = x + 5.5;
+    t -= (x + 0.5) * Math.log(t);
+    let s = 1.000000000190015;
+    for (const cj of c) { y += 1; s += cj / y; }
+    return -t + Math.log((2.5066282746310005 * s) / x);
+  }
+  function betacf(a, b, x) {
+    const FP = 1e-300;
+    const qab = a + b, qap = a + 1, qam = a - 1;
+    let c = 1, d = 1 - (qab * x) / qap;
+    if (Math.abs(d) < FP) d = FP;
+    d = 1 / d;
+    let h2 = d;
+    for (let m = 1; m <= 300; m++) {
+      const m2 = 2 * m;
+      let aa = (m * (b - m) * x) / ((qam + m2) * (a + m2));
+      d = 1 + aa * d; if (Math.abs(d) < FP) d = FP;
+      c = 1 + aa / c; if (Math.abs(c) < FP) c = FP;
+      d = 1 / d; h2 *= d * c;
+      aa = (-(a + m) * (qab + m) * x) / ((a + m2) * (qap + m2));
+      d = 1 + aa * d; if (Math.abs(d) < FP) d = FP;
+      c = 1 + aa / c; if (Math.abs(c) < FP) c = FP;
+      d = 1 / d;
+      const del = d * c; h2 *= del;
+      if (Math.abs(del - 1) < 3e-14) break;
+    }
+    return h2;
+  }
+  function betai(a, b, x) {
+    if (x <= 0) return 0;
+    if (x >= 1) return 1;
+    const bt = Math.exp(lgamma(a + b) - lgamma(a) - lgamma(b) + a * Math.log(x) + b * Math.log(1 - x));
+    return x < (a + 1) / (a + b + 2) ? (bt * betacf(a, b, x)) / a : 1 - (bt * betacf(b, a, 1 - x)) / b;
+  }
+  const tTwoP = (t, df) => betai(df / 2, 0.5, df / (df + t * t));
+  function tCrit(df, alpha = 0.05) {
+    let lo = 0, hi = 1000;
+    for (let i = 0; i < 200; i++) { const mid = (lo + hi) / 2; if (tTwoP(mid, df) > alpha) lo = mid; else hi = mid; }
+    return (lo + hi) / 2;
+  }
+  function zInv(p) {
+    const a = [-3.969683028665376e1, 2.209460984245205e2, -2.759285104469687e2, 1.38357751867269e2, -3.066479806614716e1, 2.506628277459239];
+    const b = [-5.447609879822406e1, 1.615858368580409e2, -1.556989798598866e2, 6.680131188771972e1, -1.328068155288572e1];
+    const c = [-7.784894002430293e-3, -3.223964580411365e-1, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
+    const d = [7.784695709041462e-3, 3.224671290700398e-1, 2.445134137142996, 3.754408661907416];
+    const pl = 0.02425;
+    let q, r;
+    if (p < pl) { q = Math.sqrt(-2 * Math.log(p)); return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1); }
+    if (p <= 1 - pl) { q = p - 0.5; r = q * q; return ((((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q) / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1); }
+    q = Math.sqrt(-2 * Math.log(1 - p));
+    return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+  }
+  function gammaP(a, x) {
+    if (x <= 0) return 0;
+    const pre = Math.exp(-x + a * Math.log(x) - lgamma(a));
+    if (x < a + 1) {
+      let ap = a, sum = 1 / a, del = sum;
+      for (let n = 0; n < 500; n++) { ap++; del *= x / ap; sum += del; if (Math.abs(del) < Math.abs(sum) * 1e-14) break; }
+      return sum * pre;
+    }
+    let b = x + 1 - a, c = 1e300, d = 1 / b, hh = d;
+    for (let i = 1; i < 500; i++) {
+      const an = -i * (i - a);
+      b += 2; d = an * d + b; if (Math.abs(d) < 1e-300) d = 1e-300;
+      c = b + an / c; if (Math.abs(c) < 1e-300) c = 1e-300;
+      d = 1 / d;
+      const del = d * c; hh *= del;
+      if (Math.abs(del - 1) < 1e-14) break;
+    }
+    return 1 - pre * hh;
+  }
+  const chiP = (x, df) => 1 - gammaP(df / 2, x / 2);
+  const lchoose = (n, k) => lgamma(n + 1) - lgamma(k + 1) - lgamma(n - k + 1);
+  function nelderMead(f, x0, steps, iters = 3000) {
+    const n = x0.length;
+    let sx = [x0.slice()];
+    for (let i = 0; i < n; i++) { const p = x0.slice(); p[i] += steps[i]; sx.push(p); }
+    let fv = sx.map(f);
+    for (let it = 0; it < iters; it++) {
+      const idx = fv.map((_, i) => i).sort((a, b) => fv[a] - fv[b]);
+      sx = idx.map((i) => sx[i]); fv = idx.map((i) => fv[i]);
+      if (Math.abs(fv[n] - fv[0]) < 1e-14 * (1 + Math.abs(fv[0]))) break;
+      const c = Array(n).fill(0);
+      for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) c[j] += sx[i][j] / n;
+      const pt = (t) => c.map((cj, j) => cj + t * (sx[n][j] - cj));
+      const xr = pt(-1), fr = f(xr);
+      if (fr < fv[0]) { const xe = pt(-2), fe = f(xe); if (fe < fr) { sx[n] = xe; fv[n] = fe; } else { sx[n] = xr; fv[n] = fr; } }
+      else if (fr < fv[n - 1]) { sx[n] = xr; fv[n] = fr; }
+      else {
+        const xc = fr < fv[n] ? pt(-0.5) : pt(0.5), fc = f(xc);
+        if (fc < Math.min(fr, fv[n])) { sx[n] = xc; fv[n] = fc; }
+        else for (let i = 1; i <= n; i++) { sx[i] = sx[i].map((v, j) => sx[0][j] + 0.5 * (v - sx[0][j])); fv[i] = f(sx[i]); }
+      }
+    }
+    const b = fv.indexOf(Math.min(...fv));
+    return { x: sx[b], f: fv[b] };
+  }
+  // 4PL: y = A + (D − A) / (1 + (C/x)^B)
+  function fit4pl(x, y) {
+    const ord = x.map((_, i) => i).sort((a, b) => x[a] - x[b]);
+    const lx = x.map((v) => Math.log10(v));
+    const cost = (p) => {
+      const [A, D, lc, B] = p;
+      if (B <= 0.05 || B > 20) return 1e30;
+      let s = 0;
+      for (let i = 0; i < x.length; i++) s += (y[i] - (A + (D - A) / (1 + 10 ** ((lc - lx[i]) * B)))) ** 2;
+      return s;
+    };
+    const span = Math.max(...y) - Math.min(...y) || 1;
+    let best = { x: [y[ord[0]], y[ord[ord.length - 1]], (Math.min(...lx) + Math.max(...lx)) / 2, 1] };
+    best.f = cost(best.x);
+    for (let r = 0; r < 4; r++) {
+      const res = nelderMead(cost, best.x, [span * 0.1, span * 0.1, 0.3, 0.3]);
+      if (res.f <= best.f) best = res;
+    }
+    const my = mean(y), sst = y.reduce((s, v) => s + (v - my) ** 2, 0);
+    return { A: best.x[0], D: best.x[1], C: 10 ** best.x[2], B: best.x[3], r2: sst ? 1 - best.f / sst : 1 };
+  }
+  const KM = { mouse: 3, hamster: 5, rat: 6, ferret: 7, guineapig: 8, rabbit: 12, monkey: 12, dog: 20 };
+  const positive = (v, keys) => keys.forEach((k) => { if (!(v[k] > 0)) throw new Error('0보다 큰 값을 입력하세요'); });
+
+  const TOOLS = [
+    {
+      id: 'dil', name: '희석 (C₁V₁ = C₂V₂)',
+      note: '모르는 값 하나만 비워 두면 그 값을 계산합니다. 희석액은 원액에 더할 용매의 부피입니다.',
+      fields: [
+        { k: 'c1', l: 'C₁ 원액 농도', u: 'conc', d: '10', du: 'mM', opt: true },
+        { k: 'v1', l: 'V₁ 취할 부피', u: 'vol', d: '', du: 'µL', opt: true },
+        { k: 'c2', l: 'C₂ 최종 농도', u: 'conc', d: '100', du: 'µM', opt: true },
+        { k: 'v2', l: 'V₂ 최종 부피', u: 'vol', d: '1', du: 'mL', opt: true },
+      ],
+      compute(v) {
+        const names = ['c1', 'v1', 'c2', 'v2'];
+        const blanks = names.filter((k) => v[k] === null);
+        if (blanks.length !== 1) throw new Error('모르는 값 하나만 비워 두세요');
+        let { c1, v1, c2, v2 } = v;
+        const b = blanks[0];
+        if (b === 'c1') c1 = (c2 * v2) / v1; else if (b === 'v1') v1 = (c2 * v2) / c1; else if (b === 'c2') c2 = (c1 * v1) / v2; else v2 = (c1 * v1) / c2;
+        positive({ c1, v1, c2, v2 }, names);
+        if (c1 < c2 || v1 > v2 * (1 + 1e-9)) throw new Error('C₂는 C₁보다 낮고 V₁은 V₂보다 작아야 합니다');
+        const out = { c1: ['C₁ 원액 농도', sc(c1, 'conc')], v1: ['V₁ 취할 부피', sc(v1, 'vol')], c2: ['C₂ 최종 농도', sc(c2, 'conc')], v2: ['V₂ 최종 부피', sc(v2, 'vol')] };
+        return { rows: [[...out[b], true], ['희석액(용매) 부피', sc(v2 - v1, 'vol')], ['희석 배수', sig(c1 / c2) + ' 배']] };
+      },
+    },
+    {
+      id: 'prep', name: '용액 제조 (질량 계산)',
+      note: '필요한 질량 = 농도 × 부피 × 분자량 ÷ 순도. 수화물은 결정수를 포함한 분자량을 쓰세요.',
+      fields: [
+        { k: 'mw', l: '분자량 (g/mol)', d: '180.16' },
+        { k: 'c', l: '목표 농도', u: 'conc', d: '100', du: 'mM' },
+        { k: 'vol', l: '만들 부피', u: 'vol', d: '50', du: 'mL' },
+        { k: 'pur', l: '순도 (%)', d: '100' },
+      ],
+      compute(v) {
+        positive(v, ['mw', 'c', 'vol', 'pur']);
+        if (v.pur > 100) throw new Error('순도는 100% 이하여야 합니다');
+        const mol = v.c * v.vol;
+        return { rows: [['칭량할 질량', sc((mol * v.mw) / (v.pur / 100), 'mass'), true], ['물질량', sc(mol, 'mol')]] };
+      },
+    },
+    {
+      id: 'buffer', name: '완충액 (Henderson–Hasselbalch)',
+      note: 'pH = pKa + log([염기형]/[산형]). 완충 능력은 pKa ± 1 범위에서 유효합니다. 실제 pH는 이온 세기와 온도에 따라 달라지니 pH 미터로 맞추세요.',
+      fields: [
+        { k: 'preset', l: '완충계', t: 'sel', d: '7.48', opts: [['4.76', '아세트산 (pKa 4.76)'], ['6.10', 'MES (6.10)'], ['6.76', 'PIPES (6.76)'], ['7.20', 'MOPS (7.20)'], ['7.21', '인산 pKa₂ (7.21)'], ['7.48', 'HEPES (7.48)'], ['8.06', 'Tris (8.06, 25 °C)'], ['8.26', 'Bicine (8.26)'], ['9.30', 'CHES (9.30)'], ['10.33', '탄산 pKa₂ (10.33)']] },
+        { k: 'pka', l: 'pKa 직접 입력', d: '', opt: true },
+        { k: 'ph', l: '목표 pH', d: '7.4' },
+        { k: 'c', l: '총 완충액 농도', u: 'conc', d: '50', du: 'mM' },
+        { k: 'vol', l: '만들 부피', u: 'vol', d: '500', du: 'mL' },
+      ],
+      compute(v) {
+        positive(v, ['c', 'vol']);
+        const pka = v.pka !== null ? v.pka : parseFloat(v.preset);
+        const ratio = 10 ** (v.ph - pka);
+        const fb = ratio / (1 + ratio);
+        const tot = v.c * v.vol;
+        const notes = [];
+        if (Math.abs(v.ph - pka) > 1) notes.push('목표 pH가 pKa ± 1 밖이라 완충 능력이 약합니다.');
+        if (v.pka === null && v.preset === '8.06') notes.push('Tris의 pKa는 온도가 1 °C 오를 때마다 약 0.028 낮아집니다. 사용 온도에서 pH를 맞추세요.');
+        return { rows: [['[염기형]/[산형] 비', sig(ratio), true], ['염기형 비율', sig(fb * 100) + ' %'], ['염기형 양', sc(tot * fb, 'mol')], ['산형 양', sc(tot * (1 - fb), 'mol')]], notes };
+      },
+    },
+    {
+      id: 'rcf', name: '원심분리 (rpm ↔ ×g)',
+      note: 'RCF = 1.118×10⁻⁵ × 반경(cm) × rpm². 반경은 로터 사양의 최대 반경(rmax)을 쓰세요.',
+      fields: [
+        { k: 'dir', l: '변환 방향', t: 'sel', d: 'rpm', opts: [['rpm', 'rpm → ×g'], ['g', '×g → rpm']] },
+        { k: 'r', l: '로터 반경 (cm)', d: '8.4' },
+        { k: 'val', l: '입력값 (rpm 또는 ×g)', d: '12000' },
+      ],
+      compute(v) {
+        positive(v, ['r', 'val']);
+        return v.dir === 'rpm'
+          ? { rows: [['상대 원심력', sig(1.118e-5 * v.r * v.val ** 2) + ' ×g', true]] }
+          : { rows: [['회전 속도', sig(Math.sqrt(v.val / (1.118e-5 * v.r))) + ' rpm', true]] };
+      },
+    },
+    {
+      id: 'cells', name: '세포 계수 (혈구계수판)',
+      note: '큰 사각형 한 칸(부피 0.1 µL)의 세포 수를 넣으세요. 세포 수/mL = 평균 × 희석 배수 × 10⁴. 트립판블루 1:1 혼합이면 희석 배수는 2입니다.',
+      fields: [
+        { k: 'live', l: '살아 있는 세포 수 (칸별)', t: 'text', d: '52 48 55 50' },
+        { k: 'dead', l: '죽은 세포 수 (칸별)', t: 'text', d: '4 6 5 3', opt: true },
+        { k: 'df', l: '희석 배수', d: '2' },
+        { k: 'sv', l: '세포 현탁액 부피', u: 'vol', d: '5', du: 'mL' },
+        { k: 'target', l: '파종할 세포 수', d: '1e6', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['df', 'sv']);
+        const live = parseList(v.live, '살아 있는 세포');
+        const conc = mean(live) * v.df * 1e4;
+        const rows = [['세포 농도', sig(conc) + ' cells/mL', true], ['현탁액 총 세포 수', sig(conc * v.sv * 1e3) + ' cells']];
+        if (v.dead) {
+          const dead = parseList(v.dead, '죽은 세포');
+          const sl = live.reduce((s, x) => s + x, 0), sd2 = dead.reduce((s, x) => s + x, 0);
+          rows.push(['생존율', sig((sl / (sl + sd2)) * 100) + ' %']);
+        }
+        if (v.target) rows.push(['파종에 필요한 현탁액', sc(v.target / conc / 1e3, 'vol')]);
+        return { rows };
+      },
+    },
+    {
+      id: 'growth', name: '세포 증식 (배가 시간)',
+      note: '지수 성장기 구간의 값을 쓰세요. 배가 시간 = 시간 ÷ 배가 횟수, 비성장률 μ = ln(N/N₀) ÷ 시간.',
+      fields: [
+        { k: 'n0', l: '초기 세포 수 N₀', d: '1e5' },
+        { k: 'n1', l: '나중 세포 수 N', d: '8e5' },
+        { k: 't', l: '경과 시간 (시간)', d: '48' },
+      ],
+      compute(v) {
+        positive(v, ['n0', 'n1', 't']);
+        if (v.n1 <= v.n0) throw new Error('N은 N₀보다 커야 합니다');
+        const n = Math.log2(v.n1 / v.n0);
+        return { rows: [['배가 시간', sig(v.t / n) + ' 시간', true], ['배가 횟수', sig(n)], ['비성장률 μ', sig(Math.log(v.n1 / v.n0) / v.t) + ' /시간'], ['증가 배수', sig(v.n1 / v.n0) + ' 배']] };
+      },
+    },
+    {
+      id: 'nuc', name: '핵산 농도 (A260)',
+      note: '농도 = A260 × 계수 × 희석 배수 (계수: dsDNA 50, ssDNA 33, RNA 40 µg/mL). 순수한 DNA는 A260/280이 약 1.8, RNA는 약 2.0이고 A260/230은 2.0~2.2입니다.',
+      fields: [
+        { k: 'f', l: '핵산 종류', t: 'sel', d: '50', opts: [['50', 'dsDNA (50)'], ['33', 'ssDNA (33)'], ['40', 'RNA (40)']] },
+        { k: 'a260', l: 'A260', d: '0.85' },
+        { k: 'a280', l: 'A280', d: '0.46', opt: true },
+        { k: 'a230', l: 'A230', d: '0.40', opt: true },
+        { k: 'df', l: '희석 배수', d: '1' },
+        { k: 'path', l: '광경로 (mm)', d: '10' },
+        { k: 'vol', l: '시료 부피', u: 'vol', d: '50', du: 'µL', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['a260', 'df', 'path']);
+        const conc = v.a260 * parseFloat(v.f) * v.df * (10 / v.path);
+        const rows = [['농도', sig(conc) + ' ng/µL', true]];
+        const notes = [];
+        if (v.a280) {
+          const r = v.a260 / v.a280; rows.push(['A260/A280', sig(r, 3)]);
+          if (r < 1.7) notes.push('A260/280이 낮습니다. 단백질이나 페놀이 섞였을 수 있습니다.');
+        }
+        if (v.a230) {
+          const r = v.a260 / v.a230; rows.push(['A260/A230', sig(r, 3)]);
+          if (r < 1.8) notes.push('A260/230이 낮습니다. 염, 페놀, 탄수화물이 섞였을 수 있습니다.');
+        }
+        if (v.vol) rows.push(['총 수율', sig(conc * v.vol * 1e3) + ' µg']);
+        return { rows, notes };
+      },
+    },
+    {
+      id: 'copies', name: '핵산 분자 수 (copy number)',
+      note: '염기쌍당 평균 분자량: dsDNA 660, ssDNA 330, RNA 340 g/mol. 표준곡선용 플라스미드 희석 계산에 씁니다.',
+      fields: [
+        { k: 'amt', l: '핵산 양', u: 'mass', d: '10', du: 'ng' },
+        { k: 'len', l: '길이 (bp 또는 nt)', d: '4500' },
+        { k: 'mw', l: '핵산 종류', t: 'sel', d: '660', opts: [['660', 'dsDNA (660)'], ['330', 'ssDNA (330)'], ['340', 'RNA (340)']] },
+      ],
+      compute(v) {
+        positive(v, ['amt', 'len']);
+        const mwt = v.len * parseFloat(v.mw);
+        const mol = v.amt / mwt;
+        return { rows: [['분자 수', sig(mol * NA) + ' copies', true], ['물질량', sc(mol, 'mol')], ['분자량', sig(mwt / 1000) + ' kDa'], ['1 pmol당 질량', sig(mwt * 1e-12 * 1e9) + ' ng']] };
+      },
+    },
+    {
+      id: 'lig', name: '라이게이션 (insert 양)',
+      note: 'insert 질량 = 몰비 × vector 질량 × insert 길이 ÷ vector 길이. 일반적으로 몰비 3:1에서 시작합니다.',
+      fields: [
+        { k: 'vng', l: 'Vector 양', u: 'mass', d: '50', du: 'ng' },
+        { k: 'vbp', l: 'Vector 길이 (bp)', d: '3000' },
+        { k: 'ibp', l: 'Insert 길이 (bp)', d: '1000' },
+        { k: 'ratio', l: '몰비 (insert : vector)', d: '3' },
+      ],
+      compute(v) {
+        positive(v, ['vng', 'vbp', 'ibp', 'ratio']);
+        const vmol = v.vng / (v.vbp * 660);
+        return { rows: [['필요한 insert 양', sc((v.ratio * v.vng * v.ibp) / v.vbp, 'mass'), true], ['vector 물질량', sc(vmol, 'mol')], ['insert 물질량', sc(vmol * v.ratio, 'mol')]] };
+      },
+    },
+    {
+      id: 'seq', name: '서열 분석 (GC·Tm)',
+      note: 'Tm은 기본식 근사입니다. 14 nt 미만은 2(A+T)+4(G+C), 이상은 64.9+41×(G+C−16.4)/N입니다. 프라이머 설계에는 염 농도를 반영한 nearest-neighbor 도구를 함께 쓰세요.',
+      fields: [{ k: 'seq', l: '서열 (DNA, 5′→3′)', t: 'area', d: 'ATGGCTAGCTAGGATCCGATCG' }],
+      compute(v) {
+        let s = v.seq.split('\n').filter((l) => !l.startsWith('>')).join('').replace(/[\s\d]/g, '').toUpperCase();
+        let rna = false;
+        if (s.includes('U') && !s.includes('T')) { s = s.replace(/U/g, 'T'); rna = true; }
+        const bad = s.match(/[^ACGT]/);
+        if (bad) throw new Error('A, C, G, T 이외의 문자가 있습니다: ' + bad[0]);
+        if (!s.length) throw new Error('서열을 입력하세요');
+        const cnt = { A: 0, C: 0, G: 0, T: 0 };
+        for (const ch of s) cnt[ch]++;
+        const n = s.length, gc = cnt.G + cnt.C;
+        const tm = n < 14 ? 2 * (cnt.A + cnt.T) + 4 * gc : 64.9 + (41 * (gc - 16.4)) / n;
+        const mw = cnt.A * 313.21 + cnt.T * 304.2 + cnt.C * 289.18 + cnt.G * 329.21 - 61.96;
+        const rc = s.split('').reverse().map((c) => ({ A: 'T', T: 'A', G: 'C', C: 'G' }[c])).join('');
+        return {
+          rows: [['길이', n + ' nt', true], ['GC 함량', sig((gc / n) * 100) + ' %'], ['Tm (기본식)', sig(tm) + ' °C'], ['분자량 (ssDNA)', sig(mw) + ' g/mol'], ['A / C / G / T', `${cnt.A} / ${cnt.C} / ${cnt.G} / ${cnt.T}`], ['역상보 서열 (5′→3′)', rc]],
+          notes: rna ? ['U를 T로 바꿔 DNA 기준으로 계산했습니다.'] : [],
+        };
+      },
+    },
+    {
+      id: 'ddct', name: 'qPCR 상대 정량 (ΔΔCt)',
+      note: 'Ct 값을 여러 개 넣으면 평균을 씁니다. 배수 변화 = E^−ΔΔCt (E=2는 증폭 효율 100%). 두 유전자의 효율이 비슷할 때 쓰는 방법입니다.',
+      fields: [
+        { k: 'tc', l: '대조군 표적 유전자 Ct', t: 'text', d: '24.1 24.3 24.2' },
+        { k: 'rc', l: '대조군 내부표준 Ct', t: 'text', d: '18.0 17.9 18.1' },
+        { k: 'ts', l: '처리군 표적 유전자 Ct', t: 'text', d: '22.0 22.2 21.9' },
+        { k: 'rs', l: '처리군 내부표준 Ct', t: 'text', d: '18.1 18.0 18.0' },
+        { k: 'e', l: '증폭 효율 E (2 = 100%)', d: '2' },
+      ],
+      compute(v) {
+        if (!(v.e > 1 && v.e <= 2.5)) throw new Error('증폭 효율 E는 1보다 크고 2.5 이하여야 합니다');
+        const m = (k, l) => mean(parseList(v[k], l));
+        const dc = m('tc', '대조군 표적') - m('rc', '대조군 내부표준');
+        const dt = m('ts', '처리군 표적') - m('rs', '처리군 내부표준');
+        const dd = dt - dc;
+        return { rows: [['배수 변화 (처리/대조)', sig(v.e ** -dd) + ' 배', true], ['log₂ 배수 변화', sig(-dd * Math.log2(v.e))], ['ΔCt 대조군', sig(dc)], ['ΔCt 처리군', sig(dt)], ['ΔΔCt', sig(dd)]] };
+      },
+    },
+    {
+      id: 'stats', name: '기술통계 · 95% 신뢰구간',
+      note: '숫자를 쉼표, 공백, 줄바꿈으로 구분해 넣으세요. 신뢰구간은 t 분포 기준입니다.',
+      fields: [{ k: 'x', l: '측정값', t: 'area', d: '4.2, 5.1, 4.8, 5.6, 4.9, 5.3' }],
+      compute(v) {
+        const a = parseList(v.x, '측정값');
+        const n = a.length, m = mean(a), s = sdev(a), sem = s / Math.sqrt(n);
+        const srt = [...a].sort((p, q) => p - q);
+        const med = n % 2 ? srt[(n - 1) / 2] : (srt[n / 2 - 1] + srt[n / 2]) / 2;
+        const ci = tCrit(n - 1) * sem;
+        return { rows: [['평균 ± SD', `${sig(m)} ± ${sig(s)}`, true], ['n', String(n)], ['SEM', sig(sem)], ['95% 신뢰구간', `${sig(m - ci)} ~ ${sig(m + ci)}`], ['중앙값', sig(med)], ['최소 ~ 최대', `${sig(srt[0])} ~ ${sig(srt[n - 1])}`], ['변동계수 CV', sig((s / Math.abs(m)) * 100) + ' %']] };
+      },
+    },
+    {
+      id: 'ttest', name: 't-검정 (두 군 비교)',
+      note: '정규성을 가정하는 검정입니다. 표본이 작거나 분포가 치우쳤으면 비모수 검정을 고려하세요. 비교를 여러 번 하면 다중 비교 보정이 필요합니다. 양측 검정입니다.',
+      fields: [
+        { k: 'a', l: '그룹 A 측정값', t: 'area', d: '12.1, 13.4, 11.8, 12.9, 13.1' },
+        { k: 'b', l: '그룹 B 측정값', t: 'area', d: '14.2, 15.1, 13.8, 14.9, 15.4' },
+        { k: 'type', l: '검정 종류', t: 'sel', d: 'welch', opts: [['welch', 'Welch (등분산 가정 안 함)'], ['student', 'Student (등분산)'], ['paired', '대응 표본 (paired)']] },
+      ],
+      compute(v) {
+        const a = parseList(v.a, '그룹 A'), b = parseList(v.b, '그룹 B');
+        let df, diff, se, d;
+        if (v.type === 'paired') {
+          if (a.length !== b.length) throw new Error('대응 검정은 두 그룹의 개수가 같아야 합니다');
+          const dd = a.map((x, i) => x - b[i]);
+          diff = mean(dd); const s = sdev(dd); se = s / Math.sqrt(dd.length); df = dd.length - 1; d = diff / s;
+        } else {
+          const na = a.length, nb = b.length, va = sdev(a) ** 2, vb = sdev(b) ** 2;
+          diff = mean(a) - mean(b);
+          if (v.type === 'student') {
+            const sp2 = ((na - 1) * va + (nb - 1) * vb) / (na + nb - 2);
+            se = Math.sqrt(sp2 * (1 / na + 1 / nb)); df = na + nb - 2; d = diff / Math.sqrt(sp2);
+          } else {
+            se = Math.sqrt(va / na + vb / nb);
+            df = (va / na + vb / nb) ** 2 / ((va / na) ** 2 / (na - 1) + (vb / nb) ** 2 / (nb - 1));
+            d = diff / Math.sqrt((va + vb) / 2);
+          }
+        }
+        if (!(se > 0)) throw new Error('분산이 0이라 계산할 수 없습니다');
+        const t = diff / se, p = tTwoP(t, df), ci = tCrit(df) * se;
+        return {
+          rows: [['p 값 (양측)', fmtP(p), true], ['판정 (α = 0.05)', p < 0.05 ? '유의한 차이 있음' : '유의한 차이 없음'], ['t', sig(t)], ['자유도', sig(df)], ['평균 차이 (A−B)', sig(diff)], ['차이의 95% 신뢰구간', `${sig(diff - ci)} ~ ${sig(diff + ci)}`], ["Cohen's d", sig(d)], ['A 평균 ± SD (n)', `${sig(mean(a))} ± ${sig(sdev(a))} (${a.length})`], ['B 평균 ± SD (n)', `${sig(mean(b))} ± ${sig(sdev(b))} (${b.length})`]],
+        };
+      },
+    },
+    {
+      id: 'power', name: '표본 수 산정 (두 군 비교)',
+      note: '두 군의 평균 차이를 양측 t-검정으로 검출하는 군당 표본 수의 근사값입니다. SD는 예비 실험이나 문헌에서 가져오세요. 탈락률을 고려해 여유 있게 잡으세요.',
+      fields: [
+        { k: 'delta', l: '검출하려는 평균 차이 Δ', d: '1' },
+        { k: 'sd', l: '표준편차 σ (공통)', d: '1' },
+        { k: 'alpha', l: '유의수준 α', d: '0.05' },
+        { k: 'power', l: '검정력 (1−β)', d: '0.8' },
+      ],
+      compute(v) {
+        positive(v, ['delta', 'sd']);
+        if (!(v.alpha > 0 && v.alpha < 0.5) || !(v.power > 0.5 && v.power < 1)) throw new Error('α는 0~0.5, 검정력은 0.5~1 사이로 입력하세요');
+        const zb = zInv(v.power);
+        let n = 2 * (((zInv(1 - v.alpha / 2) + zb) * v.sd) / v.delta) ** 2;
+        for (let i = 0; i < 12; i++) n = 2 * (((tCrit(Math.max(2 * Math.ceil(n) - 2, 1), v.alpha) + zb) * v.sd) / v.delta) ** 2;
+        const c = Math.max(Math.ceil(n), 2);
+        return { rows: [['군당 필요 표본 수', String(c), true], ['전체 표본 수', String(c * 2)], ["효과 크기 Cohen's d", sig(v.delta / v.sd)]] };
+      },
+    },
+    {
+      id: 'reg', name: '검량선 · 선형회귀',
+      note: '표준곡선 y = ax + b를 구하고 미지 시료의 y로 x를 역산합니다. qPCR 표준곡선이면 x에 log₁₀(농도), y에 Ct를 넣어 증폭 효율을 보세요(이상적인 기울기는 약 −3.32).',
+      fields: [
+        { k: 'x', l: 'x 값 (농도 등)', t: 'area', d: '1, 2, 3, 4, 5' },
+        { k: 'y', l: 'y 값 (흡광도, Ct 등)', t: 'area', d: '30.1, 26.8, 23.4, 20.1, 16.7' },
+        { k: 'y0', l: '미지 시료의 y', d: '22', opt: true },
+      ],
+      compute(v) {
+        const x = parseList(v.x, 'x'), y = parseList(v.y, 'y');
+        if (x.length !== y.length || x.length < 2) throw new Error('x와 y의 개수가 같고 2개 이상이어야 합니다');
+        const mx = mean(x), my = mean(y);
+        let sxx = 0, sxy = 0, syy = 0;
+        x.forEach((xi, i) => { sxx += (xi - mx) ** 2; sxy += (xi - mx) * (y[i] - my); syy += (y[i] - my) ** 2; });
+        if (sxx === 0) throw new Error('x 값이 모두 같아 회귀식을 구할 수 없습니다');
+        const a = sxy / sxx, b = my - a * mx, r2 = syy === 0 ? 1 : (sxy * sxy) / (sxx * syy);
+        const rows = [['회귀식', `y = ${sig(a)}x ${b < 0 ? '−' : '+'} ${sig(Math.abs(b))}`, true], ['R²', sig(r2, 5)], ['n', String(x.length)]];
+        const notes = [];
+        if (v.y0 !== null) { if (a === 0) throw new Error('기울기가 0이라 역산할 수 없습니다'); rows.push(['미지 시료의 x', sig((v.y0 - b) / a)]); }
+        if (a < 0) rows.push(['증폭 효율 (qPCR 기준)', sig((10 ** (-1 / a) - 1) * 100) + ' %']);
+        if (v.y0 !== null && (v.y0 < Math.min(...y) || v.y0 > Math.max(...y))) notes.push('미지 시료의 y가 표준 범위 밖입니다. 외삽한 값은 신뢰하기 어렵습니다.');
+        return { rows, notes };
+      },
+    },
+    {
+      id: 'hed', name: '동물 용량 → 사람 용량 (HED)',
+      note: '체표면적 기준 환산(FDA 2005 지침): 사람 등가 용량 = 동물 용량 × (동물 Km ÷ 37). 독성시험의 NOAEL에서 시작 용량을 정할 때는 여기에 안전계수를 추가로 적용해야 합니다.',
+      fields: [
+        { k: 'dose', l: '동물 용량 (mg/kg)', d: '10' },
+        { k: 'sp', l: '동물 종', t: 'sel', d: 'mouse', opts: [['mouse', '마우스 (Km 3)'], ['hamster', '햄스터 (5)'], ['rat', '랫드 (6)'], ['ferret', '페럿 (7)'], ['guineapig', '기니피그 (8)'], ['rabbit', '토끼 (12)'], ['monkey', '원숭이 (12)'], ['dog', '개 (20)']] },
+        { k: 'bw', l: '사람 체중 (kg)', d: '60' },
+      ],
+      compute(v) {
+        positive(v, ['dose', 'bw']);
+        const hed = (v.dose * KM[v.sp]) / 37;
+        return { rows: [['사람 등가 용량 (HED)', sig(hed) + ' mg/kg', true], ['체중 ' + sig(v.bw) + ' kg 기준 총량', sig(hed * v.bw) + ' mg'], ['환산 계수 (동물 Km ÷ 37)', sig(KM[v.sp] / 37)]] };
+      },
+    },
+    {
+      id: 'pk', name: '반감기 · 잔존량',
+      note: '1차 소실 모델: 잔존율 = 0.5^(경과 시간 ÷ 반감기). 소실 속도상수 k = ln2 ÷ t½. 반감기를 5번 거치면 약 97%가 소실되어 정상상태에 가깝습니다.',
+      fields: [
+        { k: 'th', l: '반감기 t½ (시간)', d: '6' },
+        { k: 't', l: '경과 시간 (시간)', d: '24' },
+        { k: 'a0', l: '초기량', d: '100', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['th']);
+        if (v.t < 0) throw new Error('경과 시간은 0 이상이어야 합니다');
+        const f = 0.5 ** (v.t / v.th);
+        const rows = [['잔존율', sig(f * 100) + ' %', true]];
+        if (v.a0 !== null) rows.push(['잔존량', sig(v.a0 * f)]);
+        rows.push(['소실 속도상수 k', sig(Math.LN2 / v.th) + ' /시간'], ['90% 소실까지', sig(v.th * Math.log2(10)) + ' 시간'], ['99% 소실까지', sig(v.th * Math.log2(100)) + ' 시간']);
+        return { rows };
+      },
+    },
+    // ---- 면역 · 단백질
+    {
+      id: 'serial', name: '연속 희석 (농도 표)',
+      note: '튜브 번호 n의 농도 = 시작 농도 ÷ (희석 배수)ⁿ. 농도는 시작 농도와 같은 단위입니다. 각 튜브에 희석액을 먼저 넣고 앞 튜브에서 옮긴 뒤 충분히 섞으세요.',
+      fields: [
+        { k: 'c0', l: '시작 농도 (원액)', d: '1000' },
+        { k: 'f', l: '희석 배수 (단계당)', d: '2' },
+        { k: 'n', l: '단계 수 (최대 24)', d: '8' },
+        { k: 'v', l: '튜브당 최종 부피', u: 'vol', d: '100', du: 'µL' },
+      ],
+      compute(v) {
+        positive(v, ['c0', 'v']);
+        if (!(v.f > 1)) throw new Error('희석 배수는 1보다 커야 합니다');
+        const n = Math.round(v.n);
+        if (!(n >= 1 && n <= 24)) throw new Error('단계 수는 1~24 사이로 입력하세요');
+        const rows = [['옮길 양 (앞 튜브 → 다음)', sc(v.v / v.f, 'vol'), true], ['희석액 (튜브당)', sc(v.v - v.v / v.f, 'vol')]];
+        for (let i = 1; i <= n; i++) rows.push([`튜브 ${i}`, sig(v.c0 / v.f ** i)]);
+        return { rows };
+      },
+    },
+    {
+      id: 'flow', name: '유세포분석 (% 양성 · 염색 지수)',
+      note: '염색 지수(SI) = (MFI 양성 − MFI 음성) ÷ (2 × 음성 집단의 rSD). 값이 클수록 양성과 음성이 잘 분리됩니다. MFI는 같은 기기 설정에서 얻은 값끼리만 비교하세요.',
+      fields: [
+        { k: 'pos', l: '게이트 안 양성 이벤트 수', d: '1850' },
+        { k: 'parent', l: '부모 게이트 이벤트 수', d: '12400' },
+        { k: 'total', l: '전체 이벤트 수', d: '50000', opt: true },
+        { k: 'mp', l: 'MFI 양성', d: '15200', opt: true },
+        { k: 'mn', l: 'MFI 음성(대조)', d: '310', opt: true },
+        { k: 'sdn', l: '음성 집단 rSD', d: '140', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['parent']);
+        if (v.pos < 0 || v.pos > v.parent) throw new Error('양성 이벤트 수는 0 이상, 부모 이벤트 수 이하여야 합니다');
+        const rows = [['% 부모 게이트 중', sig((v.pos / v.parent) * 100) + ' %', true]];
+        if (v.total) rows.push(['% 전체 중', sig((v.pos / v.total) * 100) + ' %']);
+        if (v.mp !== null && v.mn !== null) {
+          rows.push(['MFI 비 (양성/음성)', sig(v.mp / v.mn)]);
+          if (v.sdn) rows.push(['염색 지수 SI', sig((v.mp - v.mn) / (2 * v.sdn))]);
+        }
+        const notes = v.pos < 100 ? ['양성 이벤트가 100개 미만이라 비율의 오차가 큽니다.'] : [];
+        return { rows, notes };
+      },
+    },
+    {
+      id: 'beads', name: '유세포 절대 세포 수 (카운팅 비드)',
+      note: '세포/µL = (세포 이벤트 ÷ 비드 이벤트) × (튜브당 비드 수 ÷ 시료 부피) × 희석 배수. 비드 수는 사용하는 키트의 로트 표기를 따르세요.',
+      fields: [
+        { k: 'cells', l: '세포 이벤트 수', d: '8200' },
+        { k: 'beads', l: '비드 이벤트 수', d: '4100' },
+        { k: 'bpt', l: '튜브당 비드 수', d: '50000' },
+        { k: 'vol', l: '시료 부피', u: 'vol', d: '100', du: 'µL' },
+        { k: 'df', l: '희석 배수', d: '1' },
+      ],
+      compute(v) {
+        positive(v, ['cells', 'beads', 'bpt', 'vol', 'df']);
+        const abs = (v.cells / v.beads) * (v.bpt / (v.vol * 1e6)) * v.df;
+        return { rows: [['절대 세포 수', sig(abs) + ' cells/µL', true], ['mL당', sig(abs * 1e3) + ' cells/mL']], notes: v.beads < 1000 ? ['비드 이벤트가 1,000개 미만이면 정밀도가 떨어집니다.'] : [] };
+      },
+    },
+    {
+      id: 'stain', name: '염색 항체 마스터믹스',
+      note: '항체별로 따로 계산하세요. 필요 부피 = 시료 수 × 시료당 염색 부피 × (1 + 여유율). 항체 양 = 총 부피 ÷ 희석 배수.',
+      fields: [
+        { k: 'n', l: '시료 수', d: '12' },
+        { k: 'v', l: '시료당 염색 부피', u: 'vol', d: '100', du: 'µL' },
+        { k: 'dil', l: '항체 희석 배수 (1:X)', d: '200' },
+        { k: 'over', l: '여유율 (%)', d: '10' },
+      ],
+      compute(v) {
+        positive(v, ['n', 'v', 'dil']);
+        if (v.over < 0) throw new Error('여유율은 0 이상이어야 합니다');
+        const tot = v.n * v.v * (1 + v.over / 100), ab = tot / v.dil;
+        return { rows: [['항체 양', sc(ab, 'vol'), true], ['염색 버퍼', sc(tot - ab, 'vol')], ['총 부피', sc(tot, 'vol')]] };
+      },
+    },
+    {
+      id: 'virus', name: '바이러스 역가 · MOI',
+      note: '플라크 역가(PFU/mL) = 플라크 수 × 10^(희석 지수) ÷ 접종 부피(mL). 역가를 이미 알면 그 값을 바로 넣으세요. 필요한 바이러스 양 = MOI × 세포 수 ÷ 역가.',
+      fields: [
+        { k: 'titer', l: '역가 (PFU/mL, 알면 입력)', d: '', opt: true },
+        { k: 'pl', l: '플라크 수', d: '42', opt: true },
+        { k: 'de', l: '희석 지수 (10⁻ˣ 의 x)', d: '6', opt: true },
+        { k: 'pv', l: '접종 부피', u: 'vol', d: '0.1', du: 'mL', opt: true },
+        { k: 'cells', l: '감염할 세포 수', d: '1e6' },
+        { k: 'moi', l: '목표 MOI', d: '5' },
+      ],
+      compute(v) {
+        positive(v, ['cells', 'moi']);
+        const rows = [];
+        let titer = v.titer;
+        if (titer === null) {
+          if (v.pl === null || v.de === null || v.pv === null) throw new Error('역가를 입력하거나 플라크 수, 희석 지수, 접종 부피를 모두 입력하세요');
+          positive(v, ['pl', 'pv']);
+          titer = (v.pl * 10 ** v.de) / (v.pv * 1e3);
+          rows.push(['계산한 역가', sig(titer) + ' PFU/mL', true]);
+        }
+        if (!(titer > 0)) throw new Error('역가는 0보다 커야 합니다');
+        rows.push(['필요한 바이러스 부피', sc((v.moi * v.cells) / titer / 1e3, 'vol'), v.titer !== null], ['필요한 PFU', sig(v.moi * v.cells) + ' PFU']);
+        const notes = v.pl !== null && v.titer === null && (v.pl < 10 || v.pl > 100) ? ['플라크 수는 보통 10~100개인 웰을 써야 정확합니다.'] : [];
+        return { rows, notes };
+      },
+    },
+    {
+      id: 'lysis', name: '세포독성 (특이 용해율 · E:T)',
+      note: '특이 용해율(%) = (실험 − 자발 방출) ÷ (최대 방출 − 자발 방출) × 100. 값은 LDH, 51Cr, 발광 등 같은 판독 단위를 쓰세요. 자발 방출이 최대 방출의 25%를 넘으면 표적 세포 상태를 점검하세요.',
+      fields: [
+        { k: 'ex', l: '실험 웰 값', t: 'text', d: '0.82 0.79 0.85' },
+        { k: 'sp', l: '자발 방출 값', t: 'text', d: '0.18 0.20 0.19' },
+        { k: 'mx', l: '최대 방출 값', t: 'text', d: '1.42 1.39 1.45' },
+        { k: 'et', l: 'E:T 비 (이펙터 : 표적)', d: '10', opt: true },
+        { k: 'tg', l: '웰당 표적 세포 수', d: '10000', opt: true },
+      ],
+      compute(v) {
+        const ex = mean(parseList(v.ex, '실험')), sp = mean(parseList(v.sp, '자발')), mx = mean(parseList(v.mx, '최대'));
+        if (mx <= sp) throw new Error('최대 방출 값은 자발 방출 값보다 커야 합니다');
+        const rows = [['특이 용해율', sig(((ex - sp) / (mx - sp)) * 100) + ' %', true], ['자발/최대 방출', sig((sp / mx) * 100) + ' %']];
+        if (v.et !== null && v.tg !== null) rows.push(['웰당 이펙터 세포 수', sig(v.et * v.tg)]);
+        return { rows, notes: sp / mx > 0.25 ? ['자발 방출이 최대 방출의 25%를 넘습니다. 표적 세포 상태를 확인하세요.'] : [] };
+      },
+    },
+    {
+      id: 'a280', name: '단백질 농도 (A280)',
+      note: '농도(mg/mL) = A280 × 희석 배수 ÷ (ε × 광경로 cm) × 분자량. 서열에서 계산한 ε를 알면 직접 입력하세요. 핵산이 섞이면 A280이 높아져 과대평가됩니다.',
+      fields: [
+        { k: 'pr', l: '단백질', t: 'sel', d: 'igg', opts: [['igg', 'IgG (ε 210,000 · 150 kDa)'], ['bsa', 'BSA (ε 43,824 · 66.5 kDa)'], ['custom', '직접 입력']] },
+        { k: 'eps', l: 'ε (M⁻¹cm⁻¹, 직접 입력 시)', d: '', opt: true },
+        { k: 'mw', l: '분자량 (Da, 직접 입력 시)', d: '', opt: true },
+        { k: 'a', l: 'A280', d: '0.70' },
+        { k: 'path', l: '광경로 (mm)', d: '10' },
+        { k: 'df', l: '희석 배수', d: '1' },
+      ],
+      compute(v) {
+        positive(v, ['a', 'path', 'df']);
+        let eps, mw;
+        if (v.pr === 'custom') { if (!(v.eps > 0 && v.mw > 0)) throw new Error('ε와 분자량을 입력하세요'); eps = v.eps; mw = v.mw; }
+        else if (v.pr === 'igg') { eps = 210000; mw = 150000; } else { eps = 43824; mw = 66463; }
+        const molar = (v.a * v.df) / (eps * (v.path / 10));
+        return { rows: [['농도', sig(molar * mw) + ' mg/mL', true], ['몰농도', sig(molar * 1e6) + ' µM'], ['µg/µL', sig(molar * mw)]] };
+      },
+    },
+    {
+      id: 'wb', name: '웨스턴 블롯 시료 준비',
+      note: '로딩 부피 = 레인당 단백질 ÷ 농도. 샘플 버퍼(예: 4× Laemmli)는 최종 부피 ÷ 배수만큼 넣고 나머지는 물로 채웁니다.',
+      fields: [
+        { k: 'c', l: '시료 단백질 농도 (µg/µL)', d: '2.5' },
+        { k: 'amt', l: '레인당 단백질 (µg)', d: '20' },
+        { k: 'fv', l: '레인당 최종 부피', u: 'vol', d: '20', du: 'µL' },
+        { k: 'buf', l: '샘플 버퍼 농축 배수', t: 'sel', d: '4', opts: [['4', '4×'], ['5', '5×'], ['6', '6×']] },
+      ],
+      compute(v) {
+        positive(v, ['c', 'amt', 'fv']);
+        const load = v.amt / v.c / 1e6, buf = v.fv / parseFloat(v.buf), water = v.fv - load - buf;
+        if (water < -1e-12) throw new Error('농도가 낮아 부피가 부족합니다. 시료를 농축하거나 최종 부피를 늘리세요');
+        return { rows: [['시료 로딩 부피', sc(load, 'vol'), true], ['샘플 버퍼', sc(buf, 'vol')], ['물', sc(Math.max(water, 0), 'vol')]] };
+      },
+    },
+    {
+      id: 'dr', name: '용량-반응 · ELISA (4PL)',
+      note: '4-파라미터 로지스틱 y = A + (D−A)/(1+(C/x)^B)을 적합합니다. C는 하한과 상한의 중간 반응을 주는 농도(EC50)이며, 곡선이 100% 대비로 정규화되지 않았다면 절대 IC50과 다를 수 있습니다. 점이 많고 양끝 평탄부가 포함될수록 정확합니다. x는 0보다 커야 합니다.',
+      fields: [
+        { k: 'x', l: 'x 값 (농도, 0 초과)', t: 'area', d: '0.1, 0.3, 1, 3, 10, 30, 100' },
+        { k: 'y', l: 'y 값 (OD, 반응 등)', t: 'area', d: '5.5, 11.8, 29, 56, 85, 100, 107' },
+        { k: 'y0', l: '미지 시료의 y', d: '70', opt: true },
+      ],
+      compute(v) {
+        const x = parseList(v.x, 'x'), y = parseList(v.y, 'y');
+        if (x.length !== y.length || x.length < 5) throw new Error('x와 y의 개수가 같고 5개 이상이어야 합니다');
+        if (x.some((t) => t <= 0)) throw new Error('x는 모두 0보다 커야 합니다');
+        const f = fit4pl(x, y);
+        const rows = [['EC50 / IC50 (C)', sig(f.C), true], ['하한 A', sig(f.A)], ['상한 D', sig(f.D)], ['Hill 기울기 B', sig(f.B)], ['R²', sig(f.r2, 5)]];
+        const notes = [];
+        if (v.y0 !== null) {
+          const lo = Math.min(f.A, f.D), hi = Math.max(f.A, f.D);
+          if (v.y0 > lo && v.y0 < hi) rows.push(['미지 시료의 x', sig(f.C * ((v.y0 - f.A) / (f.D - v.y0)) ** (1 / f.B))]);
+          else notes.push('미지 시료의 y가 곡선의 하한과 상한 사이에 없어 농도를 역산할 수 없습니다.');
+        }
+        if (f.r2 < 0.98) notes.push('적합도(R²)가 낮습니다. 이상치나 곡선의 평탄부 부족을 확인하세요.');
+        return { rows, notes };
+      },
+    },
+    // ---- 핵산 · 분자생물 (추가)
+    {
+      id: 'oligo', name: '올리고 녹이기 (스톡 농도)',
+      note: '합성 보고서의 nmol 양을 넣으면 목표 스톡 농도로 맞추는 TE(또는 물) 부피를 계산합니다.',
+      fields: [
+        { k: 'amt', l: '올리고 양', u: 'mol', d: '25', du: 'nmol' },
+        { k: 'c', l: '목표 스톡 농도', u: 'conc', d: '100', du: 'µM' },
+      ],
+      compute(v) {
+        positive(v, ['amt', 'c']);
+        return { rows: [['넣을 TE / 물', sc(v.amt / v.c, 'vol'), true]] };
+      },
+    },
+    {
+      id: 'mix', name: 'PCR 마스터믹스',
+      note: '성분은 한 줄에 "이름: 반응당 부피(µL)" 형식으로 적으세요. 주형은 개별 튜브에 넣으므로 아래 칸에 따로 적고, 물은 자동으로 채웁니다.',
+      fields: [
+        { k: 'n', l: '반응 수', d: '24' },
+        { k: 'over', l: '여유율 (%)', d: '10' },
+        { k: 'fv', l: '반응당 최종 부피 (µL)', d: '20' },
+        { k: 'tpl', l: '반응당 주형 부피 (µL)', d: '2' },
+        { k: 'comp', l: '성분 (반응당 µL)', t: 'area', d: '2× Master Mix: 10\nForward primer (10 µM): 0.8\nReverse primer (10 µM): 0.8' },
+      ],
+      compute(v) {
+        positive(v, ['n', 'fv']);
+        if (v.over < 0 || v.tpl < 0) throw new Error('여유율과 주형 부피는 0 이상이어야 합니다');
+        const lines = v.comp.split('\n').map((s) => s.trim()).filter(Boolean);
+        const parts = lines.map((s) => {
+          const m = /^(.*?)\s*[:：]\s*([\d.]+)\s*$/.exec(s);
+          if (!m) throw new Error('성분 형식을 확인하세요: ' + s);
+          return [m[1], parseFloat(m[2])];
+        });
+        const sum = parts.reduce((s, p) => s + p[1], 0), water = v.fv - v.tpl - sum;
+        if (water < -1e-9) throw new Error('성분 부피의 합이 최종 부피를 넘습니다');
+        const k = v.n * (1 + v.over / 100);
+        const rows = [['준비할 반응 수', sig(k)], ...parts.map(([nm, vv]) => [nm, sig(vv * k) + ' µL']), ['물', sig(water * k) + ' µL'], ['마스터믹스 총량', sig((v.fv - v.tpl) * k) + ' µL', true], ['튜브당 분주량', sig(v.fv - v.tpl) + ' µL (+ 주형 ' + sig(v.tpl) + ' µL)']];
+        return { rows };
+      },
+    },
+    // ---- 유전체 · 시퀀싱
+    {
+      id: 'lib', name: '시퀀싱 라이브러리 몰농도',
+      note: '몰농도(nM) = 농도(ng/µL) × 10⁶ ÷ (660 × 평균 단편 길이 bp). 단편 길이는 Bioanalyzer/TapeStation의 평균 크기를 쓰세요. 어댑터 길이가 포함된 값이어야 합니다.',
+      fields: [
+        { k: 'c', l: '라이브러리 농도 (ng/µL)', d: '2.5' },
+        { k: 'size', l: '평균 단편 길이 (bp)', d: '450' },
+        { k: 'tn', l: '목표 로딩 농도 (nM)', d: '2', opt: true },
+        { k: 'fv', l: '희석 후 최종 부피', u: 'vol', d: '20', du: 'µL', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['c', 'size']);
+        const nm = (v.c * 1e6) / (660 * v.size);
+        const rows = [['라이브러리 몰농도', sig(nm) + ' nM', true]];
+        if (v.tn !== null && v.fv !== null) {
+          positive(v, ['tn', 'fv']);
+          if (v.tn > nm) throw new Error('라이브러리 농도(' + sig(nm) + ' nM)가 목표보다 낮아 희석할 수 없습니다');
+          const lv = (v.tn * v.fv) / nm;
+          rows.push(['필요한 라이브러리 부피', sc(lv, 'vol')], ['희석액', sc(v.fv - lv, 'vol')]);
+        }
+        return { rows };
+      },
+    },
+    {
+      id: 'cov', name: '시퀀싱 커버리지 · 데이터량',
+      note: '평균 커버리지 = read 수 × read 길이 × (paired면 2) ÷ 유전체 크기. Lander–Waterman 근사로 1× 이상 덮이는 비율을 보여 줍니다. 실제 균일도, 중복률, 매핑률은 반영되지 않습니다.',
+      fields: [
+        { k: 'g', l: '유전체 크기 (Mb)', d: '3100' },
+        { k: 'rl', l: 'read 길이 (bp)', d: '150' },
+        { k: 'reads', l: 'read(pair) 수 (백만)', d: '300' },
+        { k: 'mode', l: '시퀀싱 방식', t: 'sel', d: '2', opts: [['2', 'Paired-end (pair당 read 2개)'], ['1', 'Single-end']] },
+        { k: 'tc', l: '목표 커버리지 (×)', d: '30', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['g', 'rl', 'reads']);
+        const m = parseFloat(v.mode), bases = v.reads * 1e6 * v.rl * m, cov = bases / (v.g * 1e6);
+        const rows = [['평균 커버리지', sig(cov) + ' ×', true], ['1× 이상 덮이는 비율', sig((1 - Math.exp(-cov)) * 100) + ' %'], ['총 염기 수', sig(bases / 1e9) + ' Gb']];
+        if (v.tc !== null) { positive(v, ['tc']); rows.push(['목표 커버리지에 필요한 read(pair) 수', sig((v.tc * v.g * 1e6) / (v.rl * m) / 1e6) + ' 백만']); }
+        return { rows };
+      },
+    },
+    {
+      id: 'tpm', name: 'RNA-seq TPM 계산',
+      note: 'TPM = (count ÷ 유전자 길이 kb) ÷ Σ(count ÷ 길이 kb) × 10⁶. 입력한 유전자 집합 안에서만 정규화하므로 전체 유전자가 아니면 참고용입니다. 최대 20개까지 표시합니다.',
+      fields: [
+        { k: 'cnt', l: 'read count 목록', t: 'area', d: '1200, 340, 5600, 90' },
+        { k: 'len', l: '유전자 길이 목록 (bp)', t: 'area', d: '2400, 1100, 4300, 800' },
+      ],
+      compute(v) {
+        const c = parseList(v.cnt, 'count'), l = parseList(v.len, '길이');
+        if (c.length !== l.length) throw new Error('count와 길이의 개수가 같아야 합니다');
+        if (l.some((x) => x <= 0) || c.some((x) => x < 0)) throw new Error('길이는 0보다 크고 count는 0 이상이어야 합니다');
+        const rpk = c.map((x, i) => x / (l[i] / 1000)), tot = rpk.reduce((s, x) => s + x, 0);
+        if (tot === 0) throw new Error('count가 모두 0입니다');
+        return { rows: rpk.slice(0, 20).map((r, i) => [`유전자 ${i + 1}`, sig((r / tot) * 1e6) + ' TPM', i === 0]), notes: c.length > 20 ? ['앞의 20개만 표시했습니다.'] : [] };
+      },
+    },
+    {
+      id: 'hwe', name: 'Hardy–Weinberg 평형 검정',
+      note: '유전자형 빈도가 H-W 기대와 같은지 χ²(자유도 1)로 검정합니다. 기대 빈도가 5 미만인 칸이 있으면 정확검정이 필요합니다.',
+      fields: [
+        { k: 'aa', l: '동형 AA 개체 수', d: '30' },
+        { k: 'ab', l: '이형 Aa 개체 수', d: '50' },
+        { k: 'bb', l: '동형 aa 개체 수', d: '20' },
+      ],
+      compute(v) {
+        const g = [v.aa, v.ab, v.bb];
+        if (g.some((x) => !Number.isInteger(x) || x < 0)) throw new Error('개체 수는 0 이상의 정수여야 합니다');
+        const n = g[0] + g[1] + g[2];
+        if (n === 0) throw new Error('개체 수가 0입니다');
+        const p = (2 * g[0] + g[1]) / (2 * n), q = 1 - p;
+        const e = [n * p * p, 2 * n * p * q, n * q * q];
+        if (e.some((x) => x === 0)) throw new Error('대립유전자가 하나뿐이라 검정할 수 없습니다');
+        const x2 = g.reduce((s, o, i) => s + (o - e[i]) ** 2 / e[i], 0), pv = chiP(x2, 1);
+        return {
+          rows: [['p 값 (χ², df 1)', fmtP(pv), true], ['판정 (α = 0.05)', pv < 0.05 ? 'H-W 평형에서 벗어남' : '평형과 모순되지 않음'], ['대립유전자 빈도 A / a', `${sig(p)} / ${sig(q)}`], ['χ²', sig(x2)], ['기대 개체 수 AA / Aa / aa', e.map((x) => sig(x, 3)).join(' / ')]],
+          notes: e.some((x) => x < 5) ? ['기대 빈도가 5 미만인 칸이 있어 χ² 근사가 부정확할 수 있습니다.'] : [],
+        };
+      },
+    },
+    // ---- 통계 (추가)
+    {
+      id: 'fisher', name: '2×2 분할표 (Fisher · χ² · 오즈비)',
+      note: '행은 두 그룹, 열은 결과 유무입니다. 기대 빈도가 5 미만이면 χ² 대신 Fisher 정확검정을 보세요. 양측 p 값이며, 0이 있으면 오즈비 계산에 0.5를 더합니다.',
+      fields: [
+        { k: 'a', l: '그룹 1 · 결과 있음 (a)', d: '8' },
+        { k: 'b', l: '그룹 1 · 결과 없음 (b)', d: '2' },
+        { k: 'c', l: '그룹 2 · 결과 있음 (c)', d: '1' },
+        { k: 'd', l: '그룹 2 · 결과 없음 (d)', d: '5' },
+      ],
+      compute(v) {
+        const { a, b, c, d } = v;
+        if ([a, b, c, d].some((x) => !Number.isInteger(x) || x < 0)) throw new Error('0 이상의 정수를 입력하세요');
+        const n = a + b + c + d, r1 = a + b, r2 = c + d, c1 = a + c, c2 = b + d;
+        if (!r1 || !r2 || !c1 || !c2) throw new Error('행이나 열의 합이 0이면 검정할 수 없습니다');
+        const lh = (k) => lchoose(r1, k) + lchoose(r2, c1 - k) - lchoose(n, c1);
+        const obs = lh(a);
+        let p = 0;
+        for (let k = Math.max(0, c1 - r2); k <= Math.min(r1, c1); k++) { const l = lh(k); if (l <= obs + 1e-7) p += Math.exp(l); }
+        p = Math.min(1, p);
+        const z = a && b && c && d ? 0 : 0.5;
+        const or = ((a + z) * (d + z)) / ((b + z) * (c + z)), se = Math.sqrt(1 / (a + z) + 1 / (b + z) + 1 / (c + z) + 1 / (d + z));
+        const x2 = (n * (a * d - b * c) ** 2) / (r1 * r2 * c1 * c2);
+        const emin = Math.min(r1 * c1, r1 * c2, r2 * c1, r2 * c2) / n;
+        return {
+          rows: [['Fisher 정확검정 p (양측)', fmtP(p), true], ['오즈비 (95% CI)', `${sig(or)} (${sig(or * Math.exp(-1.959964 * se))} ~ ${sig(or * Math.exp(1.959964 * se))})`], ['χ² p (보정 없음)', fmtP(chiP(x2, 1))], ['결과 비율 그룹 1 / 그룹 2', `${sig((a / r1) * 100)} % / ${sig((c / r2) * 100)} %`]],
+          notes: emin < 5 ? ['기대 빈도가 5 미만인 칸이 있어 χ² 값은 신뢰하기 어렵습니다. Fisher p를 보세요.'] : [],
+        };
+      },
+    },
+    {
+      id: 'mtc', name: '다중검정 보정 (Bonferroni · FDR)',
+      note: '유전체처럼 검정을 여러 번 하면 우연한 양성이 늘어납니다. Bonferroni는 가족 오류율을, Benjamini–Hochberg는 위발견율(FDR)을 조절합니다. 표시 순서는 입력 순서이며 최대 20개까지 보여 줍니다.',
+      fields: [
+        { k: 'p', l: 'p 값 목록', t: 'area', d: '0.001, 0.008, 0.039, 0.041, 0.042, 0.06, 0.074, 0.205, 0.212, 0.216' },
+        { k: 'alpha', l: '유의수준 (α 또는 FDR)', d: '0.05' },
+      ],
+      compute(v) {
+        const p = parseList(v.p, 'p 값');
+        if (p.some((x) => x < 0 || x > 1)) throw new Error('p 값은 0~1 사이여야 합니다');
+        if (!(v.alpha > 0 && v.alpha < 1)) throw new Error('유의수준은 0~1 사이여야 합니다');
+        const m = p.length, ord = p.map((_, i) => i).sort((a, b) => p[a] - p[b]);
+        const bh = new Array(m);
+        let run = 1;
+        for (let r = m - 1; r >= 0; r--) { run = Math.min(run, (p[ord[r]] * m) / (r + 1)); bh[ord[r]] = run; }
+        const bf = p.map((x) => Math.min(1, x * m));
+        const rows = [['검정 횟수 m', String(m)], ['원래 p < α', String(p.filter((x) => x < v.alpha).length) + '개'], ['Bonferroni 유의', String(bf.filter((x) => x < v.alpha).length) + '개', true], ['BH(FDR) 유의', String(bh.filter((x) => x < v.alpha).length) + '개', true]];
+        p.slice(0, 20).forEach((x, i) => rows.push([`p = ${sig(x)}`, `Bonferroni ${fmtP(bf[i])} · BH ${fmtP(bh[i])}`]));
+        return { rows, notes: m > 20 ? ['앞의 20개만 표시했습니다.'] : [] };
+      },
+    },
+  ];
+  const GROUPS = [
+    ['용액 · 시약', ['dil', 'serial', 'prep', 'buffer', 'rcf']],
+    ['세포 · 면역', ['cells', 'growth', 'flow', 'beads', 'stain', 'virus', 'lysis']],
+    ['단백질 · 검정', ['a280', 'wb', 'dr']],
+    ['핵산 · 분자생물', ['nuc', 'copies', 'lig', 'seq', 'oligo', 'mix', 'ddct']],
+    ['유전체 · 시퀀싱', ['lib', 'cov', 'tpm', 'hwe']],
+    ['통계', ['stats', 'ttest', 'power', 'reg', 'fisher', 'mtc']],
+    ['약리', ['hed', 'pk']],
+  ];
+  // LAB END
+
+  const labState = { tool: 'dil', vals: {} };
+  try { Object.assign(labState, JSON.parse(localStorage.getItem('pf-lab') || '{}')); } catch (e) {}
+  const saveLab = () => { try { localStorage.setItem('pf-lab', JSON.stringify({ tool: labState.tool, vals: labState.vals })); } catch (e) {} };
+  const labEl = { ctl: {} };
+  const SCI_NUM = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
+  function parseNum(raw) {
+    if (SCI_NUM.test(raw)) return parseFloat(raw);
+    try { const r = evaluate(raw, 'num', 10, true).value; return typeof r === 'number' ? r : null; } catch (e) { return null; }
+  }
+  function readLab(tool) {
+    const v = {};
+    for (const f of tool.fields) {
+      const c = labEl.ctl[f.k];
+      const raw = c.input.value.trim();
+      if (f.t === 'sel') { v[f.k] = c.input.value; continue; }
+      if (f.t === 'text' || f.t === 'area') {
+        if (!raw && !f.opt) throw new Error(f.l + ' 값을 입력하세요');
+        v[f.k] = raw; continue;
+      }
+      if (!raw) { if (!f.opt) throw new Error(f.l + ' 값을 입력하세요'); v[f.k] = null; continue; }
+      const n = parseNum(raw);
+      if (n === null) throw new Error(f.l + ' 값을 확인하세요');
+      v[f.k] = f.u ? n * LU[f.u][c.unit.value] : n;
+    }
+    return v;
+  }
+  function updateLab() {
+    const tool = TOOLS.find((t) => t.id === labState.tool);
+    const saved = (labState.vals[tool.id] = {});
+    tool.fields.forEach((f) => {
+      const c = labEl.ctl[f.k];
+      saved[f.k] = c.input.value;
+      if (c.unit) saved[f.k + '_u'] = c.unit.value;
+    });
+    saveLab();
+    try {
+      const r = tool.compute(readLab(tool));
+      labEl.res.replaceChildren(...r.rows.map(([l, val, em]) => h('div', { className: em ? 'em' : '' }, h('span', { textContent: l }), h('span', { textContent: val }))));
+      labEl.dyn.textContent = (r.notes || []).join(' ');
+      state.cvOut = r.rows.map((x) => x[0] + ': ' + x[1]).join('\n');
+    } catch (e) {
+      labEl.res.replaceChildren(h('div', { className: 'cv-out err', textContent: e.message }));
+      labEl.dyn.textContent = '';
+      state.cvOut = '';
+    }
+  }
+  function buildLab() {
+    if (!TOOLS.some((t) => t.id === labState.tool)) labState.tool = 'dil';
+    const tool = TOOLS.find((t) => t.id === labState.tool);
+    const sel = h('select', { id: 'labTool' });
+    sel.setAttribute('aria-label', '계산 도구');
+    GROUPS.forEach(([g, ids]) => {
+      const og = h('optgroup', { label: g });
+      ids.forEach((id) => og.append(h('option', { value: id, textContent: TOOLS.find((t) => t.id === id).name })));
+      sel.append(og);
+    });
+    sel.value = tool.id;
+    sel.addEventListener('change', () => { labState.tool = sel.value; buildLab(); });
+    const saved = labState.vals[tool.id] || {};
+    const form = h('div', { className: 'lab-form' });
+    labEl.ctl = {};
+    tool.fields.forEach((f) => {
+      let input;
+      if (f.t === 'sel') {
+        input = h('select', {});
+        input.append(...f.opts.map(([val, l]) => h('option', { value: val, textContent: l })));
+        input.value = saved[f.k] ?? f.d;
+      } else if (f.t === 'area') {
+        input = h('textarea', { rows: 2 });
+        input.value = saved[f.k] ?? f.d ?? '';
+      } else {
+        input = h('input', { type: 'text' });
+        input.inputMode = f.t === 'text' ? 'text' : 'decimal';
+        input.value = saved[f.k] ?? f.d ?? '';
+      }
+      input.id = 'lab-' + tool.id + '-' + f.k;
+      input.autocomplete = 'off';
+      input.addEventListener('input', updateLab);
+      input.addEventListener('change', updateLab);
+      let unit = null;
+      if (f.u) {
+        unit = h('select', {});
+        unit.setAttribute('aria-label', f.l + ' 단위');
+        unit.append(...Object.keys(LU[f.u]).map((k) => h('option', { value: k, textContent: k })));
+        unit.value = saved[f.k + '_u'] ?? f.du;
+        unit.addEventListener('change', updateLab);
+      }
+      labEl.ctl[f.k] = { input, unit };
+      form.append(h('label', { className: 'lab-f', htmlFor: input.id }, h('span', { textContent: f.l + (f.opt ? ' (선택)' : '') }), unit ? h('div', { className: 'lab-in' }, input, unit) : input));
+    });
+    labEl.res = h('div', { className: 'cv-all' });
+    labEl.res.setAttribute('aria-live', 'polite');
+    labEl.dyn = h('p', { className: 'cv-note' });
+    $('conv').replaceChildren(sel, form, labEl.res, labEl.dyn, h('p', { className: 'cv-note', textContent: tool.note }));
+    updateLab();
+  }
+
+  // ---- 이벤트
+  document.querySelectorAll('.modes [data-mode]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
+  $('deg').addEventListener('click', () => { state.deg = !state.deg; $('deg').textContent = state.deg ? 'Deg' : 'Rad'; render(); });
+  $('clearHist').addEventListener('click', () => { state.hist = []; saveHist(); renderHist(); });
+  $('copy').addEventListener('click', () => {
+    const txt = isConvMode() ? state.cvOut : state.expr || '';
+    const btn = $('copy');
+    const done = (ok) => { btn.textContent = ok ? '복사됨' : '복사 실패'; setTimeout(() => (btn.textContent = '복사'), 1200); };
+    try { navigator.clipboard.writeText(txt).then(() => done(true), () => done(false)); } catch (e) { done(false); }
+  });
+
+  document.addEventListener('keydown', (ev2) => {
+    if (ev2.ctrlKey || ev2.metaKey || ev2.altKey) return;
+    if (isConvMode() || /^(INPUT|SELECT|TEXTAREA)$/.test(ev2.target.tagName)) return;
+    const k = ev2.key, prog = state.mode === 'prog';
+    if (/^[0-9]$/.test(k)) { if (!prog || DIGITS.indexOf(k) < state.base) press('value', k); }
+    else if (prog && /^[a-fA-F]$/.test(k)) { if (DIGITS.indexOf(k.toUpperCase()) < state.base) press('value', k.toUpperCase()); }
+    else if (k === '.') { if (!prog) press('value', '.'); }
+    else if (k === '+') press('op', '+');
+    else if (k === '-') press('op', '−');
+    else if (k === '*') press('op', '×');
+    else if (k === '/') { ev2.preventDefault(); press('op', '÷'); }
+    else if (k === '^') press('op', prog ? '⊕' : '^');
+    else if (k === '&' || k === '|') { if (prog) press('op', k); }
+    else if (k === '~') { if (prog) press('value', '~'); }
+    else if (k === '%') press(prog ? 'op' : 'post', '%');
+    else if (k === '!') { if (!prog) press('post', '!'); }
+    else if (k === '(') press('value', '(');
+    else if (k === ')') press('raw', ')');
+    else if (k === 'Enter' || k === '=') { ev2.preventDefault(); press('eq'); }
+    else if (k === 'Backspace') press('back');
+    else if (k === 'Escape' || k === 'Delete') press('clear');
+    else return;
+  });
+
+  render();
+})();
+</script>
