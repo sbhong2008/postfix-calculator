@@ -1,3 +1,8 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>포스트픽스 계산기</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -59,6 +64,8 @@
   .pill { background: var(--key); }
   .pill:hover { background: var(--key-hover); }
 
+  [hidden] { display: none !important; }
+  .cv-all span { word-break: keep-all; }
   .screen { background: var(--bg); border-radius: 10px; padding: 12px 14px; display: grid; gap: 2px; min-height: 148px; align-content: end; text-align: right; }
   .prev { font-family: var(--mono); font-size: 13px; color: var(--muted); min-height: 18px; overflow-wrap: anywhere; }
   .expr { font-family: var(--mono); font-size: 30px; font-weight: 500; line-height: 1.2; overflow-wrap: anywhere; min-height: 36px; }
@@ -132,6 +139,7 @@
         <button type="button" id="mode-fx" data-mode="fx" aria-pressed="false">환율</button>
         <button type="button" id="mode-unit" data-mode="unit" aria-pressed="false">단위</button>
         <button type="button" id="mode-lab" data-mode="lab" aria-pressed="false">연구</button>
+        <button type="button" id="mode-acct" data-mode="acct" aria-pressed="false">회계</button>
       </div>
       <div style="display:flex; gap:6px;">
         <button type="button" class="pill" id="deg" hidden>Deg</button>
@@ -387,7 +395,7 @@ function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', '�
   function render() {
     const conv = isConvMode();
     $('screen').hidden = conv; $('mainKeys').hidden = conv; $('conv').hidden = !conv; $('histPanel').hidden = conv;
-    $('shell').style.gridTemplateColumns = conv ? (state.mode === 'lab' ? 'minmax(0, 520px)' : 'minmax(0, 400px)') : '';
+    $('shell').style.gridTemplateColumns = conv ? ((state.mode === 'lab' || state.mode === 'acct') ? 'minmax(0, 520px)' : 'minmax(0, 400px)') : '';
     if (conv) { ['sciKeys', 'hexKeys', 'progOps', 'baseSel'].forEach((i) => ($(i).hidden = true)); return; }
     $('prev').textContent = state.prev;
     const ex = $('expr');
@@ -544,7 +552,7 @@ function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', '�
     state.mode = m; state.expr = ''; state.prev = ''; state.err = ''; state.fresh = false; state.rep = null;
     document.querySelectorAll('.modes [data-mode]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
     $('deg').hidden = m !== 'sci';
-    if (m === 'fx' || m === 'unit') buildConv(); else if (m === 'lab') buildLab();
+    if (m === 'fx' || m === 'unit') buildConv(); else if (m === 'lab' || m === 'acct') buildLab();
     render();
   }
 
@@ -684,7 +692,7 @@ function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', '�
   }
 
   // ---- 연구 탭 (의생명공학 실험·통계 도구)
-  const isConvMode = () => state.mode === 'fx' || state.mode === 'unit' || state.mode === 'lab';
+  const isConvMode = () => state.mode === 'fx' || state.mode === 'unit' || state.mode === 'lab' || state.mode === 'acct';
   // LAB START
   const NA = 6.02214076e23;
   const LU = {
@@ -1544,11 +1552,492 @@ function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', '�
     ['약리', ['hed', 'pk']],
   ];
   // LAB END
+  // ACCT START
+  const money = (x, d = 2) => (Number.isFinite(x) ? (Math.abs(x) < 0.5 * 10 ** -d ? 0 : x).toLocaleString('en-US', { maximumFractionDigits: d }).replace(/-/g, '−') : '—');
+  const pct = (x, d = 2) => (Number.isFinite(x) ? (x * 100).toFixed(d).replace('-', '−') + ' %' : '—');
+  const ratioX = (x, d = 2) => (Number.isFinite(x) ? x.toFixed(d).replace('-', '−') + ' 배' : '—');
+  const tvmF = (r, n, t) => (r === 0 ? n : ((1 + r) ** n - 1) / r) * (1 + r * t);
+  function bisect(f, lo, hi) {
+    let flo = f(lo), fhi = f(hi);
+    if (!Number.isFinite(flo) || !Number.isFinite(fhi) || flo * fhi > 0) return null;
+    for (let i = 0; i < 300; i++) {
+      const mid = (lo + hi) / 2, fm = f(mid);
+      if (fm === 0) return mid;
+      if (flo * fm < 0) { hi = mid; fhi = fm; } else { lo = mid; flo = fm; }
+    }
+    return (lo + hi) / 2;
+  }
+  const cfList = (s) => parseList(s, '현금흐름');
+  const npvAt = (cf, r) => cf.reduce((s, c, i) => s + c / (1 + r) ** i, 0);
+  function irrOf(cf) {
+    if (!(cf.some((x) => x > 0) && cf.some((x) => x < 0))) return null;
+    // 구간을 쪼개 부호가 바뀌는 첫 구간에서 이분법
+    let prev = -0.9999, fp = npvAt(cf, prev);
+    for (let r = -0.99; r <= 10; r += 0.01) {
+      const f = npvAt(cf, r);
+      if (fp * f <= 0) return bisect((x) => npvAt(cf, x), prev, r);
+      prev = r; fp = f;
+    }
+    return null;
+  }
+  const signChanges = (cf) => { let n = 0, last = 0; cf.forEach((c) => { const s = Math.sign(c); if (s && last && s !== last) n++; if (s) last = s; }); return n; };
+  function parseJournal(s) {
+    const lines = String(s).split(/\n/).map((x) => x.trim()).filter(Boolean);
+    if (!lines.length) throw new Error('분개 줄을 입력하세요');
+    return lines.map((ln, i) => {
+      const m = ln.match(/^(차변|대변|차|대|Dr|Cr|D|C)\s+(.+?)\s+(-?[\d,]+\.?\d*)$/i);
+      if (!m) throw new Error(`${i + 1}번째 줄 형식 오류: "차 현금 1000" 처럼 쓰세요`);
+      const side = /^(차|d)/i.test(m[1]) ? 'D' : 'C';
+      return { side, acc: m[2], amt: parseFloat(m[3].replace(/,/g, '')) };
+    });
+  }
+  function parseInv(s) {
+    const lines = String(s).split(/\n/).map((x) => x.trim()).filter(Boolean);
+    if (!lines.length) throw new Error('거래 줄을 입력하세요');
+    return lines.map((ln, i) => {
+      const p = ln.split(/[\s,]+/);
+      const t = p[0].toUpperCase();
+      if (t === 'I' || t === '입' || t === '입고') {
+        const q = parseFloat(p[1]), c = parseFloat(p[2]);
+        if (!(q > 0) || !(c >= 0)) throw new Error(`${i + 1}번째 줄: "입고 수량 단가" 형식입니다`);
+        return { t: 'I', q, c };
+      }
+      if (t === 'O' || t === '출' || t === '출고') {
+        const q = parseFloat(p[1]);
+        if (!(q > 0)) throw new Error(`${i + 1}번째 줄: "출고 수량" 형식입니다`);
+        return { t: 'O', q };
+      }
+      throw new Error(`${i + 1}번째 줄은 입고(I) 또는 출고(O)로 시작해야 합니다`);
+    });
+  }
+  function invCalc(tx) {
+    let rec = 0, out = 0;
+    tx.forEach((x) => (x.t === 'I' ? (rec += x.q) : (out += x.q)));
+    let run = 0;
+    for (const x of tx) { run += x.t === 'I' ? x.q : -x.q; if (run < -1e-9) throw new Error('출고가 그 시점의 재고보다 많습니다'); }
+    const totalCost = tx.filter((x) => x.t === 'I').reduce((s, x) => s + x.q * x.c, 0);
+    // 총평균
+    const avg = totalCost / rec;
+    const wa = { cogs: avg * out, end: avg * (rec - out) };
+    // 이동평균
+    let q = 0, v = 0, cogs = 0;
+    tx.forEach((x) => { if (x.t === 'I') { q += x.q; v += x.q * x.c; } else { const u = q ? v / q : 0; cogs += u * x.q; q -= x.q; v -= u * x.q; } });
+    const ma = { cogs, end: v };
+    // 선입선출 (계속기록법 = 실지재고조사법 결과 동일)
+    let layers = [], fc = 0;
+    tx.forEach((x) => {
+      if (x.t === 'I') layers.push({ q: x.q, c: x.c });
+      else { let r = x.q; while (r > 1e-12) { const L = layers[0]; const u = Math.min(r, L.q); fc += u * L.c; L.q -= u; r -= u; if (L.q <= 1e-12) layers.shift(); } }
+    });
+    const fifo = { cogs: fc, end: layers.reduce((s, L) => s + L.q * L.c, 0) };
+    // 후입선출 (실지재고조사법: 기말에 일괄 계산, 기말재고는 가장 오래된 단가부터)
+    const all = tx.filter((x) => x.t === 'I');
+    let remain = rec - out, lend = 0;
+    for (const L of all) { const u = Math.min(remain, L.q); lend += u * L.c; remain -= u; if (remain <= 1e-12) break; }
+    const lifo = { cogs: totalCost - lend, end: lend };
+    return { rec, out, totalCost, wa, ma, fifo, lifo };
+  }
+  function irrNote(cf) { return signChanges(cf) > 1 ? ['현금흐름 부호가 여러 번 바뀌어 IRR이 여러 개일 수 있습니다. 가장 낮은 값을 표시했습니다.'] : []; }
+  const periodsLimit = 40;
+  // ACCT TOOLS
+  const ATOOLS = [
+    {
+      id: 'tvm', name: '화폐의 시간가치 (PV · FV · PMT · n · r)',
+      note: '엑셀 PV/FV/PMT/NPER/RATE와 같은 부호 규칙입니다. 현금 유출은 음수, 유입은 양수로 넣고, 모르는 값 하나만 비워 두세요. 연금 형태 "기초"는 연금이 기간 초에 나오는 선불연금입니다. 이자율은 기간당 %입니다.',
+      fields: [
+        { k: 'rate', l: '기간당 이자율 (%)', d: '5', opt: true },
+        { k: 'n', l: '기간 수 n', d: '10', opt: true },
+        { k: 'pmt', l: '매기 금액 PMT', d: '0', opt: true },
+        { k: 'pv', l: '현재가치 PV', d: '', opt: true },
+        { k: 'fv', l: '미래가치 FV', d: '-1000', opt: true },
+        { k: 'type', l: '연금 형태', t: 'sel', d: '0', opts: [['0', '기말 (후불연금)'], ['1', '기초 (선불연금)']] },
+      ],
+      compute(v) {
+        const keys = ['rate', 'n', 'pmt', 'pv', 'fv'];
+        const blanks = keys.filter((k) => v[k] === null);
+        if (blanks.length !== 1) throw new Error('모르는 값 하나만 비워 두세요');
+        const b = blanks[0], t = +v.type;
+        let { rate, n, pmt, pv, fv } = v;
+        let r = rate === null ? null : rate / 100;
+        const f = (rr, nn, pm, p0, f0) => p0 * (1 + rr) ** nn + pm * tvmF(rr, nn, t) + f0;
+        if (b === 'fv') fv = -(pv * (1 + r) ** n + pmt * tvmF(r, n, t));
+        else if (b === 'pv') pv = -(fv + pmt * tvmF(r, n, t)) / (1 + r) ** n;
+        else if (b === 'pmt') { const g = tvmF(r, n, t); if (g === 0) throw new Error('PMT를 계산할 수 없습니다'); pmt = -(pv * (1 + r) ** n + fv) / g; }
+        else if (b === 'n') {
+          if (r === 0) { if (pmt === 0) throw new Error('이자율 0, PMT 0이면 n을 구할 수 없습니다'); n = -(pv + fv) / pmt; }
+          else {
+            const a = pmt * (1 + r * t) - fv * r, c = pmt * (1 + r * t) + pv * r;
+            if (!(a / c > 0)) throw new Error('이 조건에서는 n의 해가 없습니다. 부호를 확인하세요');
+            n = Math.log(a / c) / Math.log(1 + r);
+          }
+        } else {
+          if (!(n > 0)) throw new Error('n은 0보다 커야 합니다');
+          r = bisect((x) => f(x, n, pmt, pv, fv), -0.9999, 10);
+          if (r === null) throw new Error('이 조건에서는 이자율의 해가 없습니다. 부호를 확인하세요');
+        }
+        const res = { rate: ['이자율', pct(r)], n: ['기간 수 n', sig(n, 6)], pmt: ['PMT', money(pmt)], pv: ['PV', money(pv)], fv: ['FV', money(fv)] };
+        return { rows: [[...res[b], true], ['검산 (합계가 0이어야 함)', money(f(r, n, pmt, pv, fv), 4)]] };
+      },
+    },
+    {
+      id: 'npv', name: '투자안 평가 (NPV · IRR · 회수기간)',
+      note: '현금흐름을 t=0부터 순서대로 입력합니다 (초기 투자는 음수). NPV는 t=0 시점 기준이며 엑셀 NPV 함수와 달리 첫 값을 할인하지 않습니다. 회수기간은 기간 내 현금흐름이 균등하다고 보고 보간합니다.',
+      fields: [
+        { k: 'cf', l: '현금흐름 (t=0, 1, 2, …)', t: 'area', d: '-1000, 300, 400, 500, 200' },
+        { k: 'r', l: '할인율 (%)', d: '10' },
+      ],
+      compute(v) {
+        const cf = cfList(v.cf);
+        if (cf.length < 2) throw new Error('현금흐름이 2개 이상 필요합니다');
+        const r = v.r / 100;
+        if (r <= -1) throw new Error('할인율을 확인하세요');
+        const npv = npvAt(cf, r);
+        const irr = irrOf(cf);
+        const pvIn = cf.slice(1).reduce((s, c, i) => s + c / (1 + r) ** (i + 1), 0);
+        const pb = (disc) => {
+          let cum = cf[0];
+          if (cum >= 0) return 0;
+          for (let i = 1; i < cf.length; i++) {
+            const c = disc ? cf[i] / (1 + r) ** i : cf[i];
+            if (cum + c >= 0) return i - 1 + (c === 0 ? 0 : -cum / c);
+            cum += c;
+          }
+          return null;
+        };
+        const p1 = pb(false), p2 = pb(true);
+        const rows = [['NPV', money(npv), true], ['IRR', irr === null ? '해 없음' : pct(irr), true], ['수익성지수 PI', cf[0] < 0 ? sig(pvIn / -cf[0]) : '—'], ['회수기간', p1 === null ? '기간 내 회수 불가' : sig(p1) + ' 기간'], ['할인회수기간', p2 === null ? '기간 내 회수 불가' : sig(p2) + ' 기간'], ['판단', npv > 0 ? 'NPV > 0 → 채택' : npv < 0 ? 'NPV < 0 → 기각' : 'NPV = 0 → 무차별']];
+        return { rows, notes: irrNote(cf) };
+      },
+    },
+    {
+      id: 'bond', name: '채권 가격 · 만기수익률 · 듀레이션',
+      note: '가격을 비워 두면 시장이자율로 채권 가격을 계산하고, 가격을 입력하면 만기수익률(YTM)을 역산합니다. 이자는 연 지급횟수에 맞춰 나눠 지급하며, 이자 지급일 직후를 기준으로 합니다(경과이자 없음). 듀레이션은 맥콜리, 수정듀레이션은 YTM 기준입니다.',
+      fields: [
+        { k: 'face', l: '액면금액', d: '10000' },
+        { k: 'cr', l: '표면이자율 (연 %)', d: '6' },
+        { k: 'y', l: '시장이자율 YTM (연 %)', d: '8', opt: true },
+        { k: 'yrs', l: '잔존만기 (년)', d: '5' },
+        { k: 'f', l: '연 이자지급 횟수', t: 'sel', d: '1', opts: [['1', '연 1회'], ['2', '반기'], ['4', '분기'], ['12', '월']] },
+        { k: 'price', l: '가격 (YTM 역산 시 입력)', d: '', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['face', 'yrs']);
+        const f = +v.f, N = Math.round(v.yrs * f);
+        if (N < 1 || Math.abs(v.yrs * f - N) > 1e-6) throw new Error('잔존만기 × 지급횟수가 정수가 되도록 입력하세요');
+        const c = (v.face * v.cr) / 100 / f;
+        const priceAt = (y) => { let s = 0; for (let i = 1; i <= N; i++) s += c / (1 + y / f) ** i; return s + v.face / (1 + y / f) ** N; };
+        let y;
+        if (v.price !== null) {
+          positive(v, ['price']);
+          y = bisect((x) => priceAt(x) - v.price, -0.99 * f, 10);
+          if (y === null) throw new Error('만기수익률을 구할 수 없습니다');
+        } else {
+          if (v.y === null) throw new Error('시장이자율 또는 가격 중 하나는 입력하세요');
+          y = v.y / 100;
+        }
+        const P = priceAt(y);
+        let dur = 0, cv = 0;
+        for (let i = 1; i <= N; i++) {
+          const cf = i === N ? c + v.face : c, pvf = cf / (1 + y / f) ** i;
+          dur += (i / f) * pvf; cv += (i * (i + 1) * pvf) / (1 + y / f) ** 2 / (f * f);
+        }
+        dur /= P; cv /= P;
+        const kind = P > v.face + 1e-9 ? '할증발행(프리미엄)' : P < v.face - 1e-9 ? '할인발행(디스카운트)' : '액면발행';
+        return { rows: [[v.price !== null ? '만기수익률 YTM' : '채권 가격', v.price !== null ? pct(y) : money(P), true], ['가격 / 액면', (P / v.face * 100).toFixed(3) + ' %'], ['발행 형태', kind], ['매기 이자', money(c)], ['맥콜리 듀레이션', sig(dur) + ' 년'], ['수정 듀레이션', sig(dur / (1 + y / f)) + ' 년'], ['컨벡시티', sig(cv)], ['금리 +1%p 시 가격 변화(추정)', pct(-(dur / (1 + y / f)) * 0.01 + 0.5 * cv * 0.0001)]] };
+      },
+    },
+    {
+      id: 'amort', name: '사채 · 대출 상각표 (유효이자율법)',
+      note: '액면금액과 표면이자(현금이자), 유효이자율로 발행금액을 구하고 기간별 이자비용(기초 장부금액 × 유효이자율), 상각액, 기말 장부금액을 보여 줍니다. 연 1회 이자 지급, 만기 일시상환 기준이며 기간은 연 단위입니다.',
+      fields: [
+        { k: 'face', l: '액면금액', d: '100000' },
+        { k: 'cr', l: '표면이자율 (연 %)', d: '5' },
+        { k: 'er', l: '유효이자율 (연 %)', d: '8' },
+        { k: 'n', l: '만기 (년)', d: '3' },
+      ],
+      compute(v) {
+        positive(v, ['face', 'n']);
+        const n = Math.round(v.n);
+        if (n < 1 || n > 60 || Math.abs(v.n - n) > 1e-9) throw new Error('만기는 1~60 사이의 정수 년으로 입력하세요');
+        const c = (v.face * v.cr) / 100, r = v.er / 100;
+        if (r <= -1) throw new Error('유효이자율을 확인하세요');
+        let issue = 0;
+        for (let i = 1; i <= n; i++) issue += c / (1 + r) ** i;
+        issue += v.face / (1 + r) ** n;
+        const rows = [['발행금액', money(issue), true], ['할인(할증)액', money(issue - v.face)], ['발행 형태', issue > v.face + 1e-9 ? '할증발행' : issue < v.face - 1e-9 ? '할인발행' : '액면발행']];
+        let bv = issue, totalInt = 0;
+        for (let i = 1; i <= n; i++) {
+          const ie = bv * r, am = ie - c;
+          bv += am; totalInt += ie;
+          rows.push([`${i}년차`, `이자비용 ${money(ie)} · 현금 ${money(c)} · 상각 ${money(am)} · 장부 ${money(bv)}`]);
+        }
+        rows.push(['총 이자비용', money(totalInt)]);
+        return { rows, notes: [`만기 시 장부금액은 액면금액(${money(v.face)})과 같아집니다. 상각 후 값이 다르면 입력을 확인하세요.`] };
+      },
+    },
+    {
+      id: 'loan', name: '대출 상환 스케줄 (원리금 · 원금균등)',
+      note: '월 단위로 계산하며 연이율을 12로 나눈 월이율을 씁니다. 원리금균등은 매월 같은 금액, 원금균등은 매월 같은 원금을 갚습니다. 거치기간과 수수료는 반영하지 않습니다.',
+      fields: [
+        { k: 'p', l: '대출 원금', d: '100000000' },
+        { k: 'r', l: '연이율 (%)', d: '5' },
+        { k: 'm', l: '상환 기간 (개월)', d: '120' },
+        { k: 'type', l: '상환 방식', t: 'sel', d: 'eq', opts: [['eq', '원리금균등'], ['pr', '원금균등'], ['bu', '만기일시']] },
+      ],
+      compute(v) {
+        positive(v, ['p', 'm']);
+        const m = Math.round(v.m);
+        if (m < 1 || m > 600) throw new Error('상환 기간은 1~600개월 사이로 입력하세요');
+        const i = v.r / 1200;
+        let bal = v.p, tot = 0;
+        const rows = [], sched = [];
+        let pay = 0;
+        if (v.type === 'eq') pay = i === 0 ? v.p / m : (v.p * i) / (1 - (1 + i) ** -m);
+        for (let k = 1; k <= m; k++) {
+          const intr = bal * i;
+          let prin = v.type === 'eq' ? pay - intr : v.type === 'pr' ? v.p / m : k === m ? bal : 0;
+          bal -= prin; tot += intr;
+          sched.push([k, intr + prin, prin, intr, Math.max(bal, 0)]);
+        }
+        const first = sched[0], last = sched[sched.length - 1];
+        rows.push(['첫 회 납입액', money(first[1]), true], ['마지막 회 납입액', money(last[1])], ['총 이자', money(tot), true], ['총 상환액', money(v.p + tot)]);
+        const show = m <= periodsLimit ? sched : sched.slice(0, 12);
+        show.forEach((s) => rows.push([`${s[0]}회차`, `납입 ${money(s[1], 0)} · 원금 ${money(s[2], 0)} · 이자 ${money(s[3], 0)} · 잔액 ${money(s[4], 0)}`]));
+        return { rows, notes: m > periodsLimit ? ['앞의 12회차만 표시했습니다.'] : [] };
+      },
+    },
+    {
+      id: 'dep', name: '감가상각 (정액 · 정률 · 연수합계 · 생산량)',
+      note: '취득원가에서 잔존가치를 뺀 상각대상금액을 방법별로 배분합니다. 정률법은 상각률 = 1 − (잔존가치/취득원가)^(1/내용연수)를 쓰며 잔존가치가 0이면 계산할 수 없습니다. 생산량비례법은 연도별 생산량을 쉼표로 입력하세요. 월할 상각은 반영하지 않고 연 단위입니다.',
+      fields: [
+        { k: 'cost', l: '취득원가', d: '1000000' },
+        { k: 'sv', l: '잔존가치', d: '100000' },
+        { k: 'life', l: '내용연수 (년)', d: '5' },
+        { k: 'meth', l: '방법', t: 'sel', d: 'sl', opts: [['sl', '정액법'], ['db', '정률법'], ['syd', '연수합계법'], ['dd', '이중체감법 (200%)'], ['uop', '생산량비례법']] },
+        { k: 'units', l: '연도별 생산량 (생산량비례법)', t: 'area', d: '', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['cost', 'life']);
+        const L = Math.round(v.life);
+        if (L < 1 || L > 60 || Math.abs(v.life - L) > 1e-9) throw new Error('내용연수는 1~60 사이의 정수로 입력하세요');
+        if (v.sv < 0 || v.sv >= v.cost) throw new Error('잔존가치는 0 이상, 취득원가 미만이어야 합니다');
+        const dep = [], base = v.cost - v.sv;
+        let bv = v.cost;
+        if (v.meth === 'sl') for (let t = 1; t <= L; t++) dep.push(base / L);
+        else if (v.meth === 'syd') { const S = (L * (L + 1)) / 2; for (let t = 1; t <= L; t++) dep.push((base * (L - t + 1)) / S); }
+        else if (v.meth === 'db') {
+          if (v.sv === 0) throw new Error('정률법은 잔존가치가 0보다 커야 합니다');
+          const r = 1 - (v.sv / v.cost) ** (1 / L);
+          for (let t = 1; t <= L; t++) { const d = bv * r; dep.push(d); bv -= d; }
+          bv = v.cost;
+        } else if (v.meth === 'dd') {
+          const r = 2 / L;
+          for (let t = 1; t <= L; t++) { const d = Math.max(0, Math.min(bv * r, bv - v.sv)); dep.push(d); bv -= d; }
+          bv = v.cost;
+        } else {
+          if (!v.units) throw new Error('연도별 생산량을 입력하세요');
+          const u = parseList(v.units, '생산량');
+          const tot = u.reduce((s, x) => s + x, 0);
+          if (!(tot > 0)) throw new Error('생산량 합계는 0보다 커야 합니다');
+          u.forEach((x) => dep.push((base * x) / tot));
+        }
+        const rows = [];
+        let acc = 0;
+        dep.forEach((d, t) => { acc += d; rows.push([`${t + 1}년차`, `상각비 ${money(d)} · 누계 ${money(acc)} · 장부 ${money(v.cost - acc)}`]); });
+        const note = v.meth === 'db' ? ['정률법 상각률 = ' + pct(1 - (v.sv / v.cost) ** (1 / L), 4)] : v.meth === 'dd' ? ['이중체감법은 장부금액이 잔존가치 아래로 내려가지 않도록 한도만 둡니다. 정액법으로 전환하는 방식은 반영하지 않았습니다.'] : [];
+        return { rows: [['총 상각액', money(acc), true], ['기말 장부금액', money(v.cost - acc)], ...rows], notes: note };
+      },
+    },
+    {
+      id: 'inv', name: '재고자산 단가결정 (FIFO · LIFO · 평균법)',
+      note: '거래를 한 줄에 하나씩 입력하세요. 입고는 "I 수량 단가", 출고는 "O 수량"입니다. 기초재고는 첫 줄의 입고로 넣으세요. 이동평균법은 계속기록법, 총평균법·후입선출법은 실지재고조사법(기말 일괄 계산)으로 계산합니다. 선입선출법은 두 방법의 결과가 같습니다. 후입선출법은 K-IFRS에서 허용되지 않습니다.',
+      fields: [
+        { k: 'tx', l: '거래 (줄바꿈으로 구분)', t: 'area', d: 'I 100 10\nI 200 12\nO 150\nI 100 14\nO 120' },
+        { k: 'sp', l: '판매단가 (선택, 매출총이익 계산)', d: '', opt: true },
+      ],
+      compute(v) {
+        const R = invCalc(parseInv(v.tx));
+        const m = [['선입선출법', R.fifo], ['총평균법', R.wa], ['이동평균법', R.ma], ['후입선출법(참고)', R.lifo]];
+        const rows = [['판매가능수량', sig(R.rec, 8)], ['판매수량', sig(R.out, 8)], ['기말수량', sig(R.rec - R.out, 8)], ['판매가능재고 원가', money(R.totalCost)]];
+        m.forEach(([n, x]) => rows.push([n, `매출원가 ${money(x.cogs)} · 기말재고 ${money(x.end)}` + (v.sp !== null ? ` · 매출총이익 ${money(v.sp * R.out - x.cogs)}` : ''), n === '선입선출법']));
+        return { rows, notes: ['물가 상승기에는 선입선출법의 매출원가가 가장 낮고 이익이 가장 큽니다.'] };
+      },
+    },
+    {
+      id: 'vat', name: '부가가치세 (공급가액 ↔ 공급대가)',
+      note: '공급가액에 세율을 곱한 것이 부가세이고, 공급가액 + 부가세가 공급대가(합계)입니다. 합계에서 역산할 때는 합계 ÷ (1 + 세율)입니다. 세율은 직접 바꿀 수 있습니다. 원 단위 이하는 반올림이 아닌 실제 신고 기준과 다를 수 있습니다.',
+      fields: [
+        { k: 'amt', l: '금액', d: '110000' },
+        { k: 'dir', l: '입력한 금액', t: 'sel', d: 'gross', opts: [['net', '공급가액 (부가세 별도)'], ['gross', '공급대가 (부가세 포함)']] },
+        { k: 'rate', l: '세율 (%)', d: '10' },
+      ],
+      compute(v) {
+        positive(v, ['amt']);
+        if (v.rate < 0) throw new Error('세율을 확인하세요');
+        const r = v.rate / 100;
+        const net = v.dir === 'net' ? v.amt : v.amt / (1 + r);
+        return { rows: [['공급가액', money(net, 2), true], ['부가세', money(net * r, 2), true], ['공급대가 (합계)', money(net * (1 + r), 2)]] };
+      },
+    },
+    {
+      id: 'ratio', name: '재무비율 분석 (안정성 · 수익성 · 활동성)',
+      note: '입력한 항목으로 계산할 수 있는 비율만 표시합니다. 평균잔액 기준이 필요하면 기초와 기말의 평균을 넣으세요. 비율은 업종별로 기준이 달라 일반적인 기준값은 참고용입니다.',
+      fields: [
+        { k: 'ca', l: '유동자산', d: '500', opt: true },
+        { k: 'cl', l: '유동부채', d: '300', opt: true },
+        { k: 'inv', l: '재고자산', d: '150', opt: true },
+        { k: 'ta', l: '총자산', d: '1200', opt: true },
+        { k: 'tl', l: '총부채', d: '700', opt: true },
+        { k: 'eq', l: '자기자본', d: '500', opt: true },
+        { k: 'rev', l: '매출액', d: '2000', opt: true },
+        { k: 'cogs', l: '매출원가', d: '1400', opt: true },
+        { k: 'oi', l: '영업이익', d: '200', opt: true },
+        { k: 'ni', l: '당기순이익', d: '120', opt: true },
+        { k: 'int', l: '이자비용', d: '40', opt: true },
+        { k: 'ar', l: '매출채권', d: '250', opt: true },
+      ],
+      compute(v) {
+        const rows = [];
+        const add = (name, need, fn, kind) => { if (need.every((k) => v[k] !== null && v[k] !== undefined)) { const x = fn(); if (Number.isFinite(x)) rows.push([name, kind === 'x' ? ratioX(x) : kind === 'p' ? pct(x) : sig(x)]); } };
+        add('유동비율', ['ca', 'cl'], () => v.ca / v.cl, 'p');
+        add('당좌비율', ['ca', 'inv', 'cl'], () => (v.ca - v.inv) / v.cl, 'p');
+        add('부채비율', ['tl', 'eq'], () => v.tl / v.eq, 'p');
+        add('자기자본비율', ['eq', 'ta'], () => v.eq / v.ta, 'p');
+        add('이자보상배율', ['oi', 'int'], () => v.oi / v.int, 'x');
+        add('매출총이익률', ['rev', 'cogs'], () => (v.rev - v.cogs) / v.rev, 'p');
+        add('영업이익률', ['oi', 'rev'], () => v.oi / v.rev, 'p');
+        add('순이익률', ['ni', 'rev'], () => v.ni / v.rev, 'p');
+        add('ROA (총자산순이익률)', ['ni', 'ta'], () => v.ni / v.ta, 'p');
+        add('ROE (자기자본순이익률)', ['ni', 'eq'], () => v.ni / v.eq, 'p');
+        add('총자산회전율', ['rev', 'ta'], () => v.rev / v.ta, 'x');
+        add('재고자산회전율', ['cogs', 'inv'], () => v.cogs / v.inv, 'x');
+        add('매출채권회전율', ['rev', 'ar'], () => v.rev / v.ar, 'x');
+        add('매출채권회수기간', ['rev', 'ar'], () => (v.ar / v.rev) * 365, 'n');
+        add('재고자산보유기간', ['cogs', 'inv'], () => (v.inv / v.cogs) * 365, 'n');
+        add('재무레버리지 (자산/자본)', ['ta', 'eq'], () => v.ta / v.eq, 'x');
+        if (v.ni !== null && v.rev !== null && v.ta !== null && v.eq !== null) rows.push(['DuPont ROE (순이익률 × 회전율 × 레버리지)', pct((v.ni / v.rev) * (v.rev / v.ta) * (v.ta / v.eq))]);
+        if (!rows.length) throw new Error('계산할 수 있는 항목이 없습니다. 값을 입력하세요');
+        if (v.ta !== null && v.tl !== null && v.eq !== null && Math.abs(v.ta - v.tl - v.eq) > 1e-6 * Math.max(1, Math.abs(v.ta))) rows.push(['회계등식 확인', `총자산 ≠ 부채 + 자본 (차이 ${money(v.ta - v.tl - v.eq)})`]);
+        return { rows, notes: ['회수기간과 보유기간은 365일 기준입니다.'] };
+      },
+    },
+    {
+      id: 'cvp', name: '손익분기점 · 원가-조업도-이익 (CVP)',
+      note: '공헌이익 = 단가 − 단위당 변동비. 손익분기점 수량 = 고정비 ÷ 단위당 공헌이익입니다. 목표이익이 세후라면 세율을 입력하세요(세전 목표이익 = 세후 ÷ (1 − 세율)). 안전한계율과 영업레버리지는 예상 판매량이 있을 때 계산합니다.',
+      fields: [
+        { k: 'p', l: '단위당 판매가', d: '1000' },
+        { k: 'vc', l: '단위당 변동비', d: '600' },
+        { k: 'fc', l: '총 고정비', d: '2000000' },
+        { k: 'target', l: '목표 이익 (선택)', d: '1000000', opt: true },
+        { k: 'tax', l: '법인세율 (%, 목표이익이 세후일 때)', d: '0', opt: true },
+        { k: 'q', l: '예상 판매량 (선택)', d: '8000', opt: true },
+      ],
+      compute(v) {
+        positive(v, ['p', 'fc']);
+        if (v.vc < 0) throw new Error('변동비는 0 이상이어야 합니다');
+        const cm = v.p - v.vc;
+        if (!(cm > 0)) throw new Error('단위당 판매가가 변동비보다 커야 합니다');
+        const cmr = cm / v.p, bq = v.fc / cm;
+        const rows = [['단위당 공헌이익', money(cm), true], ['공헌이익률', pct(cmr)], ['손익분기점 수량', sig(bq, 8) + ' 개', true], ['손익분기점 매출액', money(v.fc / cmr)]];
+        if (v.target !== null) {
+          const t = (v.tax || 0) / 100;
+          if (t < 0 || t >= 1) throw new Error('세율은 0 이상 100 미만이어야 합니다');
+          const pre = v.target / (1 - t);
+          rows.push(['목표이익 달성 수량', sig((v.fc + pre) / cm, 8) + ' 개'], ['목표이익 달성 매출액', money((v.fc + pre) / cmr)], ['필요한 세전이익', money(pre)]);
+        }
+        if (v.q !== null) {
+          positive(v, ['q']);
+          const oi = cm * v.q - v.fc;
+          rows.push(['예상 영업이익', money(oi), true], ['안전한계율', pct((v.q - bq) / v.q)]);
+          if (oi !== 0) rows.push(['영업레버리지도(DOL)', sig((cm * v.q) / oi)]);
+        }
+        return { rows };
+      },
+    },
+    {
+      id: 'wacc', name: '자본비용 (CAPM · WACC)',
+      note: 'Ke = 무위험이자율 + β × 시장위험프리미엄. WACC = E/(D+E)·Ke + D/(D+E)·Kd·(1−t). 가중치는 시장가치를 쓰는 것이 원칙입니다. 부채비용 Kd는 세전 이자율입니다.',
+      fields: [
+        { k: 'rf', l: '무위험이자율 (%)', d: '3' },
+        { k: 'beta', l: '베타 β', d: '1.2' },
+        { k: 'mrp', l: '시장위험프리미엄 (%)', d: '6' },
+        { k: 'kd', l: '세전 부채비용 Kd (%)', d: '5' },
+        { k: 'tax', l: '법인세율 (%)', d: '22' },
+        { k: 'e', l: '자기자본 시장가치 E', d: '600' },
+        { k: 'd', l: '부채 시장가치 D', d: '400' },
+      ],
+      compute(v) {
+        positive(v, ['e']);
+        if (v.d < 0 || v.tax < 0 || v.tax >= 100) throw new Error('부채 또는 세율을 확인하세요');
+        const ke = v.rf + v.beta * v.mrp, we = v.e / (v.e + v.d), wd = 1 - we;
+        const kdAt = v.kd * (1 - v.tax / 100);
+        return { rows: [['자기자본비용 Ke', ke.toFixed(3) + ' %', true], ['세후 부채비용', kdAt.toFixed(3) + ' %'], ['E/(D+E)', pct(we)], ['D/(D+E)', pct(wd)], ['WACC', (we * ke + wd * kdAt).toFixed(3) + ' %', true]] };
+      },
+    },
+    {
+      id: 'ear', name: '유효이자율 환산 · 72의 법칙',
+      note: '명목이자율을 연 복리횟수로 나눠 연 유효이자율(EAR)을 구합니다. 72의 법칙은 원금이 두 배가 되는 기간의 근사치이고, 정확한 값은 ln2 ÷ ln(1+r)입니다.',
+      fields: [
+        { k: 'nom', l: '명목 연이자율 (%)', d: '6' },
+        { k: 'm', l: '연 복리횟수', t: 'sel', d: '12', opts: [['1', '연 1회'], ['2', '반기'], ['4', '분기'], ['12', '월'], ['365', '일']] },
+      ],
+      compute(v) {
+        if (v.nom <= -100) throw new Error('이자율을 확인하세요');
+        const m = +v.m, ear = (1 + v.nom / 100 / m) ** m - 1;
+        const cont = Math.exp(v.nom / 100) - 1;
+        return { rows: [['연 유효이자율 EAR', pct(ear, 4), true], ['연속복리 유효이자율', pct(cont, 4)], ['원금 2배 기간 (정확)', ear > 0 ? sig(Math.log(2) / Math.log(1 + ear)) + ' 년' : '—'], ['72의 법칙 (근사)', v.nom > 0 ? sig(72 / v.nom) + ' 년' : '—']] };
+      },
+    },
+    {
+      id: 'jrn', name: '분개 검증 · 시산표 (차변/대변)',
+      note: '한 줄에 하나씩 "차 현금 1000", "대 매출 1000"처럼 입력하세요 (차변/대변 또는 Dr/Cr도 됩니다). 차변 합계와 대변 합계가 같은지 검사하고 계정별 잔액을 보여 줍니다. 자산·비용은 차변 잔액, 부채·자본·수익은 대변 잔액이 정상입니다.',
+      fields: [
+        { k: 'j', l: '분개 줄', t: 'area', d: '차 현금 1000000\n대 자본금 1000000\n차 재고자산 300000\n대 매입채무 300000\n차 매출채권 500000\n대 매출 500000' },
+      ],
+      compute(v) {
+        const js = parseJournal(v.j);
+        let dr = 0, cr = 0;
+        const acc = new Map();
+        js.forEach((x) => { if (x.side === 'D') dr += x.amt; else cr += x.amt; const a = acc.get(x.acc) || { d: 0, c: 0 }; if (x.side === 'D') a.d += x.amt; else a.c += x.amt; acc.set(x.acc, a); });
+        const diff = dr - cr, ok = Math.abs(diff) < 1e-6;
+        const rows = [['차변 합계', money(dr)], ['대변 합계', money(cr)], ['차이', money(diff), true], ['대차 평균의 원리', ok ? '균형 ✔' : (diff > 0 ? '차변이 ' : '대변이 ') + money(Math.abs(diff)) + ' 더 큼']];
+        [...acc.entries()].forEach(([n, a]) => { const b = a.d - a.c; rows.push([n, `차변 ${money(a.d)} · 대변 ${money(a.c)} → ${b >= 0 ? '차변' : '대변'} 잔액 ${money(Math.abs(b))}`]); });
+        return { rows };
+      },
+    },
+    {
+      id: 'ctax', name: '이익 → 세후이익 · 배당 · 유보',
+      note: '세율은 직접 입력하세요(법인세율은 과세표준 구간과 개정에 따라 달라지므로 구간별 계산은 하지 않습니다). 세전이익에서 세금을 빼 당기순이익을 구하고, 배당성향으로 배당과 유보이익을 나눕니다.',
+      fields: [
+        { k: 'pbt', l: '법인세차감전이익', d: '100000000' },
+        { k: 'tax', l: '유효세율 (%)', d: '20' },
+        { k: 'payout', l: '배당성향 (%)', d: '30' },
+        { k: 'sh', l: '발행주식수 (선택)', d: '1000000', opt: true },
+      ],
+      compute(v) {
+        if (v.tax < 0 || v.tax >= 100 || v.payout < 0 || v.payout > 100) throw new Error('세율과 배당성향을 확인하세요');
+        const tax = v.pbt > 0 ? (v.pbt * v.tax) / 100 : 0, ni = v.pbt - tax, div = ni > 0 ? (ni * v.payout) / 100 : 0;
+        const rows = [['법인세 비용', money(tax)], ['당기순이익', money(ni), true], ['배당금', money(div)], ['유보이익', money(ni - div), true]];
+        if (v.sh !== null && v.sh > 0) rows.push(['주당순이익 EPS', money(ni / v.sh)], ['주당배당금 DPS', money(div / v.sh)]);
+        return { rows };
+      },
+    },
+  ];
+  const AGROUPS = [
+    ['시간가치 · 투자', ['tvm', 'npv', 'ear', 'wacc']],
+    ['채권 · 부채', ['bond', 'amort', 'loan']],
+    ['자산 · 원가', ['dep', 'inv', 'cvp']],
+    ['재무제표 · 세금', ['ratio', 'jrn', 'vat', 'ctax']],
+  ];
+  // ACCT END
 
-  const labState = { tool: 'dil', vals: {} };
+  const labState = { tool: 'dil', atool: 'tvm', vals: {} };
   try { Object.assign(labState, JSON.parse(localStorage.getItem('pf-lab') || '{}')); } catch (e) {}
-  const saveLab = () => { try { localStorage.setItem('pf-lab', JSON.stringify({ tool: labState.tool, vals: labState.vals })); } catch (e) {} };
+  const saveLab = () => { try { localStorage.setItem('pf-lab', JSON.stringify({ tool: labState.tool, atool: labState.atool, vals: labState.vals })); } catch (e) {} };
   const labEl = { ctl: {} };
+  const suite = () => (state.mode === 'acct'
+    ? { tools: ATOOLS, groups: AGROUPS, get: () => labState.atool, set: (x) => { labState.atool = x; } }
+    : { tools: TOOLS, groups: GROUPS, get: () => labState.tool, set: (x) => { labState.tool = x; } });
   const SCI_NUM = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
   function parseNum(raw) {
     if (SCI_NUM.test(raw)) return parseFloat(raw);
@@ -1572,7 +2061,8 @@ function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', '�
     return v;
   }
   function updateLab() {
-    const tool = TOOLS.find((t) => t.id === labState.tool);
+    const S = suite();
+    const tool = S.tools.find((t) => t.id === S.get());
     const saved = (labState.vals[tool.id] = {});
     tool.fields.forEach((f) => {
       const c = labEl.ctl[f.k];
@@ -1592,17 +2082,18 @@ function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', '�
     }
   }
   function buildLab() {
-    if (!TOOLS.some((t) => t.id === labState.tool)) labState.tool = 'dil';
-    const tool = TOOLS.find((t) => t.id === labState.tool);
+    const S = suite();
+    if (!S.tools.some((t) => t.id === S.get())) S.set(S.tools[0].id);
+    const tool = S.tools.find((t) => t.id === S.get());
     const sel = h('select', { id: 'labTool' });
     sel.setAttribute('aria-label', '계산 도구');
-    GROUPS.forEach(([g, ids]) => {
+    S.groups.forEach(([g, ids]) => {
       const og = h('optgroup', { label: g });
-      ids.forEach((id) => og.append(h('option', { value: id, textContent: TOOLS.find((t) => t.id === id).name })));
+      ids.forEach((id) => og.append(h('option', { value: id, textContent: S.tools.find((t) => t.id === id).name })));
       sel.append(og);
     });
     sel.value = tool.id;
-    sel.addEventListener('change', () => { labState.tool = sel.value; buildLab(); });
+    sel.addEventListener('change', () => { S.set(sel.value); buildLab(); });
     const saved = labState.vals[tool.id] || {};
     const form = h('div', { className: 'lab-form' });
     labEl.ctl = {};
@@ -1680,3 +2171,5 @@ function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', '�
   render();
 })();
 </script>
+
+</html>
