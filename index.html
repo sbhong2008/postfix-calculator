@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>포스트픽스 계산기</title>
+<title>HONG's Family Calculator</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -51,6 +51,7 @@
   .shell { max-width: 860px; margin: 0 auto; display: grid; gap: 16px; grid-template-columns: minmax(0, 400px) minmax(0, 1fr); align-items: start; }
   @media (max-width: 760px) { .shell { grid-template-columns: minmax(0, 1fr); } }
 
+  .brand { grid-column: 1 / -1; margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); text-align: center; overflow-wrap: anywhere; }
   .calc, .history { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
   .calc { padding: 14px; display: grid; gap: 12px; }
 
@@ -130,6 +131,7 @@
 </style>
 
 <main class="shell" id="shell">
+  <h1 class="brand">HONG's Family Calculator</h1>
   <section class="calc" aria-label="계산기">
     <div class="bar">
       <div class="modes" role="group" aria-label="계산 모드">
