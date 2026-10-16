@@ -589,8 +589,8 @@ function fmtInt(v, base) { return v.toString(base).toUpperCase().replace('-', '�
 
   // ---- 환율·단위 변환
   // 환율은 기준일 값을 내장하고, 가능하면 open.er-api.com에서 최신 값을 불러온다. 직접 수정한 값은 이 브라우저에만 저장한다.
-  const FX = { date: '2026-10-16', src: 'open.er-api.com', rates: { KRW: 1342.74, USD: 1, JPY: 158.087, EUR: 0.89165, CNY: 6.70299, GBP: 0.75405, AUD: 1.44602, CAD: 1.41915, CHF: 0.82829, HKD: 7.84743, SGD: 1.28234, THB: 33.5261, VND: 25856.49, TWD: 32.3603, PHP: 63.0843, INR: 95.1001, AED: 3.6725 } };
-  const FXN = { KRW: '대한민국 원', USD: '미국 달러', JPY: '일본 엔', EUR: '유로', CNY: '중국 위안', GBP: '영국 파운드', AUD: '호주 달러', CAD: '캐나다 달러', CHF: '스위스 프랑', HKD: '홍콩 달러', SGD: '싱가포르 달러', THB: '태국 바트', VND: '베트남 동', TWD: '대만 달러', PHP: '필리핀 페소', INR: '인도 루피', AED: 'UAE 디르함' };
+  const FX = { date: '2026-10-16', src: 'open.er-api.com', rates: { KRW: 1342.74, USD: 1, JPY: 158.087, EUR: 0.89165, CNY: 6.70299, GBP: 0.75405, AUD: 1.44602, CAD: 1.41915, CHF: 0.82829, HKD: 7.84743, SGD: 1.28234, THB: 33.5261, VND: 25856.49, TWD: 32.3603, PHP: 63.0843, INR: 95.1001, AED: 3.6725, BRL: 5.0545 } };
+  const FXN = { KRW: '대한민국 원', USD: '미국 달러', JPY: '일본 엔', EUR: '유로', CNY: '중국 위안', GBP: '영국 파운드', AUD: '호주 달러', CAD: '캐나다 달러', CHF: '스위스 프랑', HKD: '홍콩 달러', SGD: '싱가포르 달러', THB: '태국 바트', VND: '베트남 동', TWD: '대만 달러', PHP: '필리핀 페소', INR: '인도 루피', AED: 'UAE 디르함', BRL: '브라질 헤알' };
   const UNIT_GROUPS = [
     ['일상 · 기본', ['길이', '넓이', '부피', '질량(무게)', '시간', '데이터', '연비']],
     ['물리 · 역학', ['속도', '가속도', '각도', '힘', '토크', '압력', '밀도', '주파수']],
